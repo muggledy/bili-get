@@ -1,12 +1,15 @@
 import os, re, requests, hashlib, pickle
 from contextlib import closing
 
+__all__ = ["get_absolute_path", "find_json_dict_from_text", "Crawler"]
+
 _utils_debug = False
+_base_dir = os.path.dirname(__file__)
 
 def get_absolute_path(relative_path):
     absolute_path = \
         os.path.normpath(os.path.join(\
-        os.path.dirname(__file__), relative_path))
+        _base_dir, relative_path))
     absolute_path += \
         ('' if os.path.split(relative_path)[1] else '\\')
     parent_dir = os.path.dirname(absolute_path)
@@ -92,7 +95,7 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
         self.save_path = kwargs.get('save_path', None)
         self.chunk_size = kwargs.get('chunk_size', 1024*1024) #默认单次请求最大值设为1MB
         self.show_progress = kwargs.get('show_progress', True)
-        self.download_info_file = get_absolute_path('./tmp/crawler_download_tmp.pickle') #记录url和对应下载文件信息的临时文件路径
+        self.download_info_file = get_absolute_path('./bili_tmp/crawler_download_tmp.pickle') #记录url和对应下载文件信息的临时文件路径
         self.error_info = ''
 
     def get(self):

@@ -1,13 +1,17 @@
 
 from utils import *
 import requests, logging, \
-    re, json, pickle
-from logging import handlers
+    re, json, pickle, os
 #from lxml import etree
 from pathlib import Path
+import utils
+
+__all__ = ['Bilibili']
 
 class Bilibili:
     def __init__(self, origin_url, **kwargs):
+        if kwargs.get('base_dir') and os.path.isdir(kwargs['base_dir']):
+            utils._base_dir = kwargs['base_dir']
         self.create_logger()
         self.disable_console_log = kwargs.get('disable_console_log', False)
         self.origin_url = origin_url #原始请求视频链接
@@ -65,8 +69,8 @@ class Bilibili:
         bvid = re.findall(r'video/([^/?]+)', self.__origin_url)
         if bvid: #key id
             self.__bvid, self.__local_playlists_info_path = \
-                bvid[0], get_absolute_path(f'./tmp/local_playlists_info_{bvid[0]}.pickle')
-            self.__output_dir = get_absolute_path(f'./output/{self.__bvid}/')
+                bvid[0], get_absolute_path(f'./bili_tmp/local_playlists_info_{bvid[0]}.pickle')
+            self.__output_dir = get_absolute_path(f'./bili_output/{self.__bvid}/')
         else:
             self.__bvid, self.__local_playlists_info_path = None, None
             self.__output_dir = None
@@ -81,7 +85,7 @@ class Bilibili:
             self.playlists_info = {}
             req = requests.get(self.origin_url, headers=self.headers)
             if req.ok:
-                local_file = get_absolute_path(f"./tmp/original_url_{self.__bvid}.html")
+                local_file = get_absolute_path(f"./bili_tmp/original_url_{self.__bvid}.html")
                 Path(local_file).write_text(req.text, encoding='utf-8')
                 self.logger.info(f'get {self.origin_url} succeed and write into local file({local_file})')
                 origin_video_info = self.analyse_playinfo(req.text)
@@ -316,12 +320,12 @@ class Bilibili:
         self.__console_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s(%(funcName)s:%(lineno)s): %(message)s'))
         if hasattr(self, f'_{self.__class__.__name__}__disable_console_log') and (not self.disable_console_log):
             self.logger.addHandler(self.__console_log_handler)
-        file_log_handler = handlers.TimedRotatingFileHandler(filename='log', when='D', backupCount=3, encoding='utf-8')
+        file_log_handler = logging.FileHandler(filename='log', encoding='utf-8')
         file_log_handler.setFormatter(logging.Formatter('%(asctime)s[%(name)s] - %(pathname)s[line:%(lineno)d(%(funcName)s)] - %(levelname)s: %(message)s'))
         file_log_handler.setLevel(logging.INFO)
         self.logger.addHandler(file_log_handler)
 
 if __name__ == '__main__':
-    bilibili = Bilibili('https://www.bilibili.com/video/BV1gm411U7HJ/', disable_console_log=False, fetch_playlists=False, quality = 'MAX', force_re_download=False, headers=
+    bilibili = Bilibili('https://www.bilibili.com/video/BV1gm411U7HJ/', disable_console_log=False, fetch_playlists=False, quality = 'MAX', force_re_download=False, base_dir='D:\\workspace\\ttt\\', headers=
                         {'Cookie':"SL_GWPT_Show_Hide_tmp=1; SL_wptGlobTipTmp=1; SL_G_WPT_TO=en; SESSDATA=7357eb0a%2C1726132706%2Cdb56e%2A31CjDZrOmSdkiHTj61Lgicy4QxIpklarykOm8fNzwlQAeqXJMTjnqe8vE836hiAd_jueESVk1ObGN3RVRKR2pDSUZQeFhrbktoMFhZY2Z5REdRV25vbC1jZ3RGOFMyazI1UGpjTUZ3ZUs3SzNYQi1aR2RvUzhtRDZ0SFZvcHVEWDRhZEQ0ZDRyenpBIIEC; buvid3=7D9A3E89-DD2A-18EB-7C6A-EE67ED1DEACA15388infoc; b_nut=1714788015; CURRENT_FNVAL=4048; share_source_origin=WEIXIN; _uuid=761047D26-D2F3-845A-526F-E4E4D4107C771015546infoc; bili_ticket=eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MTUwNDcyMTYsImlhdCI6MTcxNDc4Nzk1NiwicGx0IjotMX0.to_MI_pLJYy4SMPB-L_Hku6AHQxPCDTVSs3GPx1SWW0; bili_ticket_expires=1715047156; buvid4=4633C0F9-A85E-E7E8-E194-6E2A18F95B6116740-024050402-YSL4Y8j9yPQ4xf%2FwHi58Dg%3D%3D; buvid_fp=fbda979bc28293fc0d4e3ec0c241726d; rpdid=|(umkY)mY~mm0J'u~uR~))|u); sid=6kvjoki3; bsource=search_google; CURRENT_QUALITY=80; b_lsid=EB764D10B_18F42A3AE16; enable_web_push=DISABLE; header_theme_version=CLOSE; bmg_af_switch=1; bmg_src_def_domain=i1.hdslb.com; home_feed_column=5; browser_resolution=1920-919"})
     bilibili.start()
