@@ -113,6 +113,9 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                 if _utils_debug: print(f'the url {self.url} file({existed_file[0]}) has been downloaded before, continue to download from byte {start_byte}')
             else:
                 if _utils_debug: print(f'start to download {self.url} firstly')
+                if os.path.exists(self.save_path):
+                    if _utils_debug: print(f'remove {self.save_path} for no record in {self.download_info_file}')
+                    os.remove(self.save_path)
             with closing(requests.get(self.url, headers=self.headers, stream=True)) as response:
                 if not response.ok:
                     if _utils_debug: print(f'Error: request get {self.url} failed for {response.reason}')
@@ -135,12 +138,16 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                 if self.show_progress:
                     progress = ProgressBar(response.headers['Content-Type'], 0, total=total_size)
                     progress.refresh(count=start_byte)
+                iter_num = 0
                 with open(self.save_path, 'ab') as save_f:
                     for data in response.iter_content(chunk_size=self.chunk_size):
                         if self.show_progress:
                             progress.refresh(count=len(data))
                         save_f.write(data)
                         save_f.flush()
+                        iter_num += 1
+                        if (iter_num % 8) == 0:
+                            self.save_info_into_local_tmp_file()
                 if _utils_debug: print(f'download success, saved into {self.save_path}')
                 self.save_info_into_local_tmp_file(already_download=True)
                 return True
