@@ -93,9 +93,10 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
         self.url = url
         self.headers = kwargs.get('headers', {})
         self.save_path = kwargs.get('save_path', None)
-        self.chunk_size = kwargs.get('chunk_size', 1024*1024) #默认单次请求最大值设为1MB
+        self.chunk_size = kwargs.get('chunk_size', 1024*1024*2) #默认单次请求最大值设为2MB
         self.show_progress = kwargs.get('show_progress', True)
         self.download_info_file = get_absolute_path('./bili_tmp/crawler_download_tmp.pickle') #记录url和对应下载文件信息的临时文件路径
+                                #等信息，url: (save_path, is_downloaded_flag, downloaded_bytes)
         self.error_info = ''
 
     def get(self):
@@ -111,15 +112,16 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                     self.save_path = existed_file[0]
                     if _utils_debug: print(f'{self.url} file is already downloaded success in {existed_file[0]}')
                     return True
-                start_byte = os.path.getsize(existed_file[0])
+                start_byte = existed_file[2]
                 self.headers['Range'] = f"bytes={start_byte}-"
                 if _utils_debug: print(f'the url {self.url} file({existed_file[0]}) has been downloaded before, continue to download from byte {start_byte}')
             else:
                 if _utils_debug: print(f'start to download {self.url} firstly')
-                if os.path.exists(self.save_path):
+                if (self.save_path is not None) and os.path.exists(self.save_path):
                     if _utils_debug: print(f'remove {self.save_path} for no record in {self.download_info_file}')
                     os.remove(self.save_path)
             with closing(requests.get(self.url, headers=self.headers, stream=True)) as response:
+                #print(response.headers)
                 if not response.ok:
                     if _utils_debug: print(f'Error: request get {self.url} failed for {response.reason}')
                     self.error_info = response.reason
@@ -149,15 +151,16 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                         save_f.write(data)
                         save_f.flush()
                         iter_num += 1
-                        if (iter_num % 8) == 0:
-                            self.save_info_into_local_tmp_file()
+                        self.save_info_into_local_tmp_file(start_byte+iter_num*self.chunk_size)
                 if _utils_debug: print(f'download success, saved into {self.save_path}')
-                self.save_info_into_local_tmp_file(already_download=True)
+                self.save_info_into_local_tmp_file(total_size, already_download=True)
                 return True
         except Exception as e:
-            if _utils_debug: print(f"Error(Crawler): get {self.url} failed for '{e}'")
+            if _utils_debug: print(f"Error(Crawler): get {self.url} failed for "
+                                   f'exception([{e.__traceback__.tb_frame.f_globals["__file__"]}:'
+                                   f'{e.__traceback__.tb_lineno}] {e}) occurs when analyse playinfo')
             self.error_info = e
-            self.save_info_into_local_tmp_file()
+            self.save_info_into_local_tmp_file(0)
             return False
 
     @property
@@ -186,10 +189,14 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
         self.__headers.update(headers)
 
     def gen_default_save_path(self, suffix):
-        rel_path = './crawler/' +  md5(self.url)\
+        rel_path = './bili_output/' +  md5(self.url)\
             + [_ for _ in self.url.split('/') if _ != ''][-1]
         if not suffix.startswith('.'):
             suffix = '.' + suffix
+        _suffix = [_suffix for _suffix in 
+            [(f'.{_}' if not _.startswith('.') else _) for _ in minetype2suffix.values()] if rel_path.endswith(_suffix)]
+        if _suffix:
+            suffix = _suffix[0]
         if not rel_path.endswith(suffix):
             rel_path += suffix
         return get_absolute_path(rel_path)
@@ -203,13 +210,19 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
             return data.get(url, None)
         return data
 
-    def save_info_into_local_tmp_file(self, already_download=False):
+    def save_info_into_local_tmp_file(self, downloaded_bytes, already_download=False):
         if (self.save_path is None) or (not os.path.exists(self.save_path)):
             return
         data = {}
         if os.path.exists(self.download_info_file):
             with open(self.download_info_file, 'rb') as f:
                 data = pickle.load(f)
-        data.update({self.url : (self.save_path, already_download)})
+        data.update({self.url : (self.save_path, already_download, downloaded_bytes)})
         with open(self.download_info_file, 'wb') as f:
             pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
+
+if __name__ == '__main__':
+    #测试断点续传功能
+    url = 'https://github.com/muggledy/typora-dyzj-theme/raw/master/temp/%E9%9A%BE%E7%A0%B4%E8%88%B9.mp4'
+    crawler = Crawler(url, headers={'Referer':'https://github.com/muggledy/typora-dyzj-theme/blob/master/temp/%E9%9A%BE%E7%A0%B4%E8%88%B9.mp4'})
+    crawler.get()

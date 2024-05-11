@@ -1,7 +1,8 @@
 
 from utils import *
 import requests, logging, \
-    re, json, pickle, os
+    re, json, pickle, os, \
+    subprocess, platform, sys, time
 #from lxml import etree
 from pathlib import Path
 import utils
@@ -20,12 +21,20 @@ class Bilibili:
         self.headers = kwargs.get('headers', {})
         self.quality = kwargs.get('quality', 'MAX').upper() #下载质量选择：MAX, MIN, MANUAL
         self.force_re_download = kwargs.get('force_re_download', False)
+        self.ffmpeg_debug = kwargs.get('ffmpeg_debug', False)
+        self.remove_merge_materials = kwargs.get('remove_merge_materials', True) #是否删除合成材料
         self.__crawler = Crawler(None)
 
     def start(self):
         if self.__bvid is None:
             self.logger.error(f'invalid request url: {self.origin_url}, can\'t start download')
             return
+        if not self.check_tool('ffmpeg'):
+            self.__ffmpeg_exist = False
+            ffmpeg_not_exist_prompt = \
+                'ffmpeg not exists, can\'t merge video and audio, you can prepare this tool and re-exec the download cmd'
+        else:
+            self.__ffmpeg_exist = True
         if self.force_re_download:
             if os.path.exists(self.__local_playlists_info_path):
                 self.logger.warning(f'delete old file {self.__local_playlists_info_path} for force_re_download')
@@ -49,12 +58,18 @@ class Bilibili:
         if not self.__all_downloed_flag:
             self.save_playlists_info_into_local()
         else:
+            if not self.__ffmpeg_exist: self.logger.warning(ffmpeg_not_exist_prompt)
+            else: self.check_playlists_is_merged()
             return
         self.download_by_playlists_info()
         if self.__all_downloed_flag:
             self.logger.info(f'(all) videos has already been downloaded in {self.__output_dir}!')
         else:
             self.logger.info('some videos/audios download failed, you can re-exec command to download them')
+        if not self.__ffmpeg_exist:
+            self.logger.warning(ffmpeg_not_exist_prompt)
+        else:
+            self.check_playlists_is_merged()
 
     @property
     def origin_url(self):
@@ -83,17 +98,20 @@ class Bilibili:
            即部分子剧集视频信息获取失败），返回self.playlists_info'''
         try:
             self.playlists_info = {}
+            start_time = time.time()
             req = requests.get(self.origin_url, headers=self.headers)
             if req.ok:
-                local_file = get_absolute_path(f"./bili_tmp/original_url_{self.__bvid}.html")
-                Path(local_file).write_text(req.text, encoding='utf-8')
-                self.logger.info(f'get {self.origin_url} succeed and write into local file({local_file})')
+                if False: #only for debug
+                    local_file = get_absolute_path(f"./bili_tmp/original_url_{self.__bvid}.html")
+                    Path(local_file).write_text(req.text, encoding='utf-8')
+                    self.logger.info(f'get {self.origin_url} succeed and write into local file({local_file})')
                 origin_video_info = self.analyse_playinfo(req.text)
                 if origin_video_info is None:
                     self.logger.error(f'analyse origin {self.origin_url} html page failed')
                     return None
                 if origin_video_info['p_num'] not in self.__local_already_download_p_list:
                     origin_video_info['download_flag'] = 0
+                    origin_video_info['merge_flag'] = 0
                     self.playlists_info[origin_video_info['p_num']] = origin_video_info
                 #self.logger.info(f'html analyse secceed: {str(origin_video_info)}')
                 quality_dict = {_1:_2['quality'] for _1, _2 in origin_video_info['video_info'].items()}
@@ -129,6 +147,7 @@ class Bilibili:
                             sub_video_info = self.analyse_playinfo(sub_req.text)
                             if sub_video_info is not None:
                                 sub_video_info['download_flag'] = 0
+                                sub_video_info['merge_flag'] = 0
                                 self.playlists_info[sub_video_info['p_num']] = sub_video_info
                             self.logger.info(f"get and analyse sub url {sub_url} {'succeed' if sub_video_info else 'failed'}")
                         except Exception as e:
@@ -136,8 +155,9 @@ class Bilibili:
                                               f'{e.__traceback__.tb_lineno}] {e}) occurs when getting from {sub_url}')
                     if len(self.playlists_info) + len(self.__local_already_download_p_list) == origin_video_info['videos']:
                         self.logger.info(f"all playlists html analyse succeed(p1~p{origin_video_info['videos']})" + 
-                            (f", in which {','.join(['p'+str(i) for i in self.__local_already_download_p_list])} info already(downloaded) get from local)!" 
-                            if self.__local_already_download_p_list else ''))
+                            (f", in which {','.join(['p'+str(i) for i in self.__local_already_download_p_list])} info "
+                             f"already(downloaded) get from local)! runtime: {time.time()-start_time:.2f}s" 
+                            if self.__local_already_download_p_list else f', runtime: {time.time()-start_time:.2f}s'))
                     else:
                         self.logger.warning(f"{origin_video_info['videos'] - (len(self.playlists_info) + len(self.__local_already_download_p_list))} "
                                          "sub videos info fetch failed!")
@@ -218,11 +238,13 @@ class Bilibili:
                 continue
             info = self.playlists_info[p]
             available_qualities = list(info['video_info'].keys())
-            best_quality_idx = sorted([(i,abs(q-self.__quality_id)) for i,q in enumerate(available_qualities)], key=lambda x:x[1])[0][0]
+            best_quality_idx = sorted([(i,abs(q-self.__quality_id)) 
+                                       for i,q in enumerate(available_qualities)], key=lambda x:x[1])[0][0]
             best_quality = available_qualities[best_quality_idx]
             get_video_url_already_succeed = 0
             if self.playlists_info[p]['download_flag'] != 1:
-                for url,codec_info in sorted(info['video_info'][best_quality]['urls'], key=lambda x:get_idx_of_specific_codedc(x[1])):
+                for url,codec_info in sorted(info['video_info'][best_quality]['urls'], 
+                                             key=lambda x:get_idx_of_specific_codedc(x[1])):
                     #if not [_c for _c in download_specific_codec_video if codec_info.lower().startswith(_c.lower())]:
                     #    continue
                     self.logger.info(f"start to download p{p}(video:{info['video_info'][best_quality]['quality']},"
@@ -233,10 +255,11 @@ class Bilibili:
                     if self.force_re_download and os.path.exists(self.__crawler.save_path):
                         self.logger.warning(f'delete old p{p} video file {self.__crawler.save_path} for force_re_download')
                         os.remove(self.__crawler.save_path)
+                    start_time = time.time()
                     ok = self.__crawler.get()
                     if ok:
                         get_video_url_already_succeed += 1
-                        self.logger.info(f"download video from {self.__crawler.url} into {self.__crawler.save_path} succeed")
+                        self.logger.info(f"download video from {self.__crawler.url} into {self.__crawler.save_path} succeed, runtime: {time.time()-start_time:.2f}s")
                         self.playlists_info[p]['download_flag'] = 1
                         self.save_playlists_info_into_local()
                         if download_only_one: break
@@ -253,16 +276,74 @@ class Bilibili:
             if self.force_re_download and os.path.exists(self.__crawler.save_path):
                 self.logger.warning(f'delete old p{p} audio file {self.__crawler.save_path} for force_re_download')
                 os.remove(self.__crawler.save_path)
+            start_time = time.time()
             ok = self.__crawler.get()
             if ok:
-                self.logger.info(f"download audio from {self.__crawler.url} into {self.__crawler.save_path} succeed")
+                self.logger.info(f"download audio from {self.__crawler.url} into {self.__crawler.save_path} succeed, runtime: {time.time()-start_time:.2f}s")
                 self.playlists_info[p]['download_flag'] += 2
+                if (not self.playlists_info[p]['merge_flag']) \
+                        and self.merge_video_and_audio(os.path.splitext(self.__crawler.save_path)[0]):
+                    self.playlists_info[p]['merge_flag'] = True
                 self.save_playlists_info_into_local()
             else:
                 failed_flag = True
                 self.logger.error(f"download audio from {self.__crawler.url} failed for {self.__crawler.error_info}")
         if not failed_flag:
             self.__all_downloed_flag = True
+
+    def merge_video_and_audio(self, filename):
+        if not self.__ffmpeg_exist:
+            return False
+        if (not os.path.exists(f'{filename}.mp4')) or (not os.path.exists(f'{filename}.mp3')):
+            self.logger.error(f'{filename}.mp4 or mp3 not exist, can\'t do merge!')
+            return False
+        cmd = f"ffmpeg -i {filename}.mp4 -i {filename}.mp3 -c:v copy -c:a aac -strict experimental {filename}_merge.mp4"
+        self.logger.info(f'start merging audio and video files by exec "{cmd}"')
+        try:
+            start_time = time.time()
+            if self.ffmpeg_debug:
+                result = subprocess.run(cmd, check=True)
+            else:
+                result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if (result.returncode == 0) and os.path.exists(f'{filename}_merge.mp4'):
+                if self.remove_merge_materials:
+                    self.logger.info(f'success! runtime: {time.time()-start_time:.2f}s, delete merge materials, rename {filename}_merge.mp4 => {filename}.mp4')
+                    os.remove(f'{filename}.mp4')
+                    os.remove(f'{filename}.mp3')
+                    os.rename(f'{filename}_merge.mp4', f'{filename}.mp4')
+                else:
+                    self.logger.info(f'success! runtime: {time.time()-start_time:.2f}s, the merged file is at {filename}_merge.mp4')
+                sys.stdout.flush()
+                return True
+            self.logger.error('merge failed for unknown reason!')
+            sys.stdout.flush()
+            return False
+        except Exception as e:
+            self.logger.error(f'merge failed for {e}!')
+        sys.stdout.flush()
+        return False
+
+    def check_playlists_is_merged(self):
+        if not self.__ffmpeg_exist:
+            return
+        self.logger.info('check if all playlists\'s video and audio are all merged...')
+        n0 = len(self.playlists_info.keys()) #全部剧集总数
+        n1, n2, n3, n4 = 0, 0, 0, 0
+        for p in sorted(self.playlists_info.keys()):
+            if self.playlists_info[p]['download_flag'] == 3:
+                if not self.playlists_info[p]['merge_flag']:
+                    if not self.merge_video_and_audio(os.path.join(self.__output_dir, self.playlists_info[p]['title'])):
+                        n2 += 1 #此处最新合成失败的数量
+                    else:
+                        n4 += 1 #此处最新合成成功的数量
+                        self.playlists_info[p]['merge_flag'] = True
+                        self.save_playlists_info_into_local()
+                else:
+                    n1 += 1 #之前已经合成的数量
+            else:
+                n3 += 1 #视频尚未下载成功的数量
+        if (n1 == n0) or ((n1+n4) == n0): self.logger.info(f'all {n0} mv are merged!')
+        else: self.logger.info(f'{n0-(n1+n4)} mv not merge, in which {n3} mv not downloaded, {n2} mv (ffmpeg)merge failed!')
 
     @staticmethod
     def generate_bilibili_video_url(bvid, p=None):
@@ -325,7 +406,20 @@ class Bilibili:
         file_log_handler.setLevel(logging.INFO)
         self.logger.addHandler(file_log_handler)
 
+    @staticmethod
+    def check_tool(tool_name):
+        try:
+            if platform.system() == 'Windows':
+                subprocess.run(['where', tool_name], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            else:
+                subprocess.run(['which', tool_name], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
 if __name__ == '__main__':
-    bilibili = Bilibili('https://www.bilibili.com/video/BV1gm411U7HJ/', disable_console_log=False, fetch_playlists=False, quality = 'MAX', force_re_download=False, base_dir='D:\\workspace\\ttt\\', headers=
+    bilibili = Bilibili('https://www.bilibili.com/video/BV1gm411U7HJ/', disable_console_log=False, 
+                        fetch_playlists=False, quality = 'MAX', force_re_download=False, base_dir='D:\\workspace\\ttt\\', ffmpeg_debug=False, 
+                        remove_merge_materials=True, headers=
                         {'Cookie':"SL_GWPT_Show_Hide_tmp=1; SL_wptGlobTipTmp=1; SL_G_WPT_TO=en; SESSDATA=7357eb0a%2C1726132706%2Cdb56e%2A31CjDZrOmSdkiHTj61Lgicy4QxIpklarykOm8fNzwlQAeqXJMTjnqe8vE836hiAd_jueESVk1ObGN3RVRKR2pDSUZQeFhrbktoMFhZY2Z5REdRV25vbC1jZ3RGOFMyazI1UGpjTUZ3ZUs3SzNYQi1aR2RvUzhtRDZ0SFZvcHVEWDRhZEQ0ZDRyenpBIIEC; buvid3=7D9A3E89-DD2A-18EB-7C6A-EE67ED1DEACA15388infoc; b_nut=1714788015; CURRENT_FNVAL=4048; share_source_origin=WEIXIN; _uuid=761047D26-D2F3-845A-526F-E4E4D4107C771015546infoc; bili_ticket=eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MTUwNDcyMTYsImlhdCI6MTcxNDc4Nzk1NiwicGx0IjotMX0.to_MI_pLJYy4SMPB-L_Hku6AHQxPCDTVSs3GPx1SWW0; bili_ticket_expires=1715047156; buvid4=4633C0F9-A85E-E7E8-E194-6E2A18F95B6116740-024050402-YSL4Y8j9yPQ4xf%2FwHi58Dg%3D%3D; buvid_fp=fbda979bc28293fc0d4e3ec0c241726d; rpdid=|(umkY)mY~mm0J'u~uR~))|u); sid=6kvjoki3; bsource=search_google; CURRENT_QUALITY=80; b_lsid=EB764D10B_18F42A3AE16; enable_web_push=DISABLE; header_theme_version=CLOSE; bmg_af_switch=1; bmg_src_def_domain=i1.hdslb.com; home_feed_column=5; browser_resolution=1920-919"})
     bilibili.start()
