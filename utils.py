@@ -120,6 +120,7 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                 if (self.save_path is not None) and os.path.exists(self.save_path):
                     if _utils_debug: print(f'remove {self.save_path} for no record in {self.download_info_file}')
                     os.remove(self.save_path)
+            if _utils_debug: print(f'headers = {self.headers}')
             with closing(requests.get(self.url, headers=self.headers, stream=True)) as response:
                 #print(response.headers)
                 if not response.ok:
