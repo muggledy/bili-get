@@ -18,7 +18,6 @@ def get_absolute_path(relative_path):
     return absolute_path
 
 def find_json_dict_from_text(text, start_str=None, num=float('inf')):
-    '''demo: find_json_dict_from_text('a0={"name":"celestezj"};window.name=muggledy;a="{x:4}";d={"z1":"z2", "z3":{"z4":"{z5}","z6":888}}', 'window')'''
     stack = []
     start, end = 0, 0
     json_dict = []
@@ -26,19 +25,8 @@ def find_json_dict_from_text(text, start_str=None, num=float('inf')):
         re_text = re.findall(start_str + r'[\s\S]*', text)
         text = re_text[0] if re_text else text
     for i, c in enumerate(text):
-        if stack and (stack[-1] in ['"', "'"]) and (c not in ['"', "'"]):
-            continue
-        if c == "'":
-            if stack and stack[-1] == "'":
-                stack.pop()
-                continue
-            stack.append(c)
-        elif c == '"':
-            if stack and stack[-1] == '"':
-                stack.pop()
-                continue
-            stack.append(c)
-        elif c == '{':
+        #print(stack, text[i:i+100])
+        if c == '{':
             if stack == []:
                 start = i
             stack.append(c)

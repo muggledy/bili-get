@@ -6,6 +6,7 @@ import requests, logging, \
 from logging.handlers import RotatingFileHandler
 #from lxml import etree
 from pathlib import Path
+from copy import deepcopy
 import utils
 
 __all__ = ['Bilibili']
@@ -28,6 +29,7 @@ class Bilibili:
         utils._utils_debug = self.debug_all
         self.auto_merge = kwargs.get('auto_merge', True)
         self.__crawler = Crawler(None, headers=self.headers)
+        self.__download_at_once = True #每获取并解析一个剧集页面，就立即开始下载，而非等到收集完全部剧集信息后再遍历下载
 
     def start(self):
         if self.__bvid is None:
@@ -44,28 +46,21 @@ class Bilibili:
             if os.path.exists(self.__local_playlists_info_path):
                 self.logger.warning(f'delete old file {self.__local_playlists_info_path} for force_re_download')
                 os.remove(self.__local_playlists_info_path)
-            local_playlists_info = {}
+            __local_playlists_info = {}
             self.__local_already_download_p_list = []
         else:
-            #首先从本地获取视频信息，如果视频（含子剧集）未全部下载完成，则
+            #首先从本地获取视频信息并填充到self.playlists_info，如果视频（含子剧集）未全部下载完成，则
             #针对未下载剧集需要重新从B站服务器获取相应的剧集信息并更新本地数据
-            local_playlists_info = self.get_playlists_info_from_local()
+            __local_playlists_info = self.get_playlists_info_from_local()
             self.__local_already_download_p_list = \
-                [v['p_num'] for k,v in local_playlists_info.items() if v['download_flag'] == 3]
-        if self.get_origin_url_and_analyse() is None:
+                [v['p_num'] for k,v in __local_playlists_info.items() if v['download_flag'] == 3]
+        self.playlists_info = deepcopy(__local_playlists_info)
+        if self.get_origin_url_and_analyse() is None: #对尚未下载完成的剧集页面进行获取并得到音视频下载地址等相关信息更新到self.playlists_info中
             return
-        for i in self.playlists_info.keys():
-            if local_playlists_info.get(i) is None:
-                continue
-            self.playlists_info[i]['download_flag'] = local_playlists_info[i]['download_flag'] #虽然没有下载完，但可能已经下载了视频，只是音频还没有，此信息不能被丢弃，否则会造成重复下载
-            if local_playlists_info[i].get('video_save_path'):
-                self.playlists_info[i]['video_save_path'] = local_playlists_info[i]['video_save_path']
-            if local_playlists_info[i].get('audio_save_path'):
-                self.playlists_info[i]['audio_save_path'] = local_playlists_info[i]['audio_save_path']
-        local_playlists_info.update(self.playlists_info)
-        self.playlists_info = local_playlists_info #;print(self.playlists_info)
         if not self.__all_downloed_flag:
             self.save_playlists_info_into_local()
+            if not self.__download_at_once:
+                self.__all_downloed_flag = True #先预设能够全部下载成功，如果有一个失败了，则再置为False
         else:
             if self.auto_merge:
                 if not self.__ffmpeg_exist: self.logger.warning(ffmpeg_not_exist_prompt)
@@ -81,6 +76,17 @@ class Bilibili:
                 self.logger.warning(ffmpeg_not_exist_prompt)
             else:
                 self.check_playlists_is_merged()
+
+    def update_newest_playlists_info(self, playlists_info): #上次虽然没有下载完，但可能已经下载了视频，只是音频还没有，这些信息不能被丢弃，否则会造成重复下载
+        for i in playlists_info.keys():
+            if self.playlists_info.get(i) is None:
+                continue
+            playlists_info[i]['download_flag'] = self.playlists_info[i]['download_flag']
+            if self.playlists_info[i].get('video_save_path'):
+                playlists_info[i]['video_save_path'] = self.playlists_info[i]['video_save_path']
+            if self.playlists_info[i].get('audio_save_path'):
+                playlists_info[i]['audio_save_path'] = self.playlists_info[i]['audio_save_path']
+        self.playlists_info.update(playlists_info)
 
     @property
     def origin_url(self):
@@ -108,7 +114,7 @@ class Bilibili:
         '''解析原始请求url并获取全部剧集的视频信息（若fetch_playlists为True且是多剧集视频的话，注意可能不全，
            即部分子剧集视频信息获取失败），返回self.playlists_info'''
         try:
-            self.playlists_info = {}
+            new_add_info_num = 0
             start_time = time.time()
             req = requests.get(self.origin_url, headers=self.headers)
             if req.ok:
@@ -123,9 +129,10 @@ class Bilibili:
                 if origin_video_info['p_num'] not in self.__local_already_download_p_list:
                     origin_video_info['download_flag'] = 0
                     origin_video_info['merge_flag'] = False
-                    self.playlists_info[origin_video_info['p_num']] = origin_video_info
+                    self.update_newest_playlists_info({origin_video_info['p_num']:origin_video_info})
+                    new_add_info_num += 1
                 if self.debug_all:
-                    self.logger.info(f'html analyse secceed: {str(origin_video_info)}')
+                    self.logger.info(f'html analyse succeed: {str(origin_video_info)}')
                 quality_dict = {_1:_2['quality'] for _1, _2 in origin_video_info['video_info'].items()}
                 _desc = re.sub('\n',' ',origin_video_info['desc'])
                 self.logger.info(f"origin html({origin_video_info['url']}) analyse succeed\n{'(title):':>15}"
@@ -149,6 +156,10 @@ class Bilibili:
                     self.logger.info(f'(all) videos has already been downloaded in {self.__output_dir}! '
                                      f'if you want to re-download, please delete {self.__local_playlists_info_path} or pass force_re_download param')
                     self.__all_downloed_flag = True
+                    return self.playlists_info
+                if self.__download_at_once:
+                    self.__all_downloed_flag = True
+                    self.download_by_playlists_info(which_p=origin_video_info['p_num'])
                 if self.fetch_playlists and (origin_video_info['videos'] > 1):
                     for p in range(1, origin_video_info['videos']+1):
                         if (p == origin_video_info['p_num']) or (p in self.__local_already_download_p_list):
@@ -157,21 +168,24 @@ class Bilibili:
                             sub_url = self.generate_bilibili_video_url(origin_video_info['bvid'], p)
                             sub_req = requests.get(sub_url, headers=self.headers)
                             sub_video_info = self.analyse_playinfo(sub_req.text)
+                            self.logger.info(f"get and analyse sub url {sub_url} {'succeed' if sub_video_info else 'failed'}")
                             if sub_video_info is not None:
                                 sub_video_info['download_flag'] = 0
                                 sub_video_info['merge_flag'] = False
-                                self.playlists_info[sub_video_info['p_num']] = sub_video_info
-                            self.logger.info(f"get and analyse sub url {sub_url} {'succeed' if sub_video_info else 'failed'}")
+                                self.update_newest_playlists_info({sub_video_info['p_num']:sub_video_info})
+                                new_add_info_num += 1
+                                if self.__download_at_once:
+                                    self.download_by_playlists_info(which_p=sub_video_info['p_num'])
                         except Exception as e:
                             self.logger.error(f'exception([{e.__traceback__.tb_frame.f_globals["__file__"]}:'
                                               f'{e.__traceback__.tb_lineno}] {e}) occurs when getting from {sub_url}')
-                    if len(self.playlists_info) + len(self.__local_already_download_p_list) == origin_video_info['videos']:
+                    if new_add_info_num + len(self.__local_already_download_p_list) == origin_video_info['videos']:
                         self.logger.info(f"all playlists html analyse succeed(p1~p{origin_video_info['videos']})" + 
                             (f", in which {','.join(['p'+str(i) for i in self.__local_already_download_p_list])} info "
-                             f"already(downloaded) get from local)! runtime: {time.time()-start_time:.2f}s" 
+                             f"(already downloaded) get from local)! runtime: {time.time()-start_time:.2f}s" 
                             if self.__local_already_download_p_list else f', runtime: {time.time()-start_time:.2f}s'))
                     else:
-                        self.logger.warning(f"{origin_video_info['videos'] - (len(self.playlists_info) + len(self.__local_already_download_p_list))} "
+                        self.logger.warning(f"{origin_video_info['videos'] - (new_add_info_num + len(self.__local_already_download_p_list))} "
                                          "sub videos info fetch failed!")
                 return self.playlists_info
             else:
@@ -235,8 +249,7 @@ class Bilibili:
                               f'{e.__traceback__.tb_lineno}] {e}) occurs when analyse playinfo')
             return None
 
-    def download_by_playlists_info(self):
-        failed_flag = False
+    def download_by_playlists_info(self, which_p=None): #which_p非None：仅下载指定一集
         download_only_one = True
         download_specific_codec_video = ['avc1', 'hev1'] #同一个quality(1080P/720P)的也有多个下载链接，不同链接的视频流
         #使用的codec编解码器不同，譬如avc1.640033，hev1.1.6.L120.90，av01.0.00M.10.0.110.01.01.01.0，这个列表其实是一个优
@@ -247,6 +260,8 @@ class Bilibili:
             if _ == []: return float('inf')
             else: return _[0]
         for p in sorted(self.playlists_info.keys()):
+            if (which_p is not None) and (p != which_p):
+                continue
             if self.playlists_info[p]['download_flag'] == 3:
                 continue
             info = self.playlists_info[p]
@@ -279,7 +294,7 @@ class Bilibili:
                         self.save_playlists_info_into_local()
                         if download_only_one: break
                     else:
-                        failed_flag = True
+                        self.__all_downloed_flag = False
                         self.logger.error(f"download video from {self.__crawler.url} failed for {self.__crawler.error_info}")
             else:
                 self.logger.info(f"p{p} video has been downloaded in {self.__output_dir}")
@@ -313,10 +328,8 @@ class Bilibili:
                     self.playlists_info[p]['merge_flag'] = True
                 self.save_playlists_info_into_local()
             else:
-                failed_flag = True
+                self.__all_downloed_flag = False
                 self.logger.error(f"download audio from {self.__crawler.url} failed for {self.__crawler.error_info}")
-        if not failed_flag:
-            self.__all_downloed_flag = True
 
     def merge_video_and_audio(self, video_file, audio_file):
         if (not self.auto_merge) or (not self.__ffmpeg_exist):
@@ -453,7 +466,5 @@ class Bilibili:
 if __name__ == '__main__':
     bilibili = Bilibili('https://www.bilibili.com/video/BV1z84y1r7Tc', disable_console_log=False, 
                         fetch_playlists=True, quality = 'MIN', force_re_download=False, base_dir='D:\\workspace\\ttt\\', auto_merge=True, ffmpeg_debug=False, 
-                        remove_merge_materials=True, debug_all=False, headers=
-                        {'Cookie':"SL_GWPT_Show_Hide_tmp=1; SL_wptGlobTipTmp=1; SL_G_WPT_TO=en; SESSDATA=7357eb0a%2C1726132706%2Cdb56e%2A31CjDZrOmSdkiHTj61Lgicy4QxIpklarykOm8fNzwlQAeqXJMTjnqe8vE836hiAd_jueESVk1ObGN3RVRKR2pDSUZQeFhrbktoMFhZY2Z5REdRV25vbC1jZ3RGOFMyazI1UGpjTUZ3ZUs3SzNYQi1aR2RvUzhtRDZ0SFZvcHVEWDRhZEQ0ZDRyenpBIIEC; buvid3=7D9A3E89-DD2A-18EB-7C6A-EE67ED1DEACA15388infoc; b_nut=1714788015; CURRENT_FNVAL=4048; share_source_origin=WEIXIN; _uuid=761047D26-D2F3-845A-526F-E4E4D4107C771015546infoc; bili_ticket=eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MTUwNDcyMTYsImlhdCI6MTcxNDc4Nzk1NiwicGx0IjotMX0.to_MI_pLJYy4SMPB-L_Hku6AHQxPCDTVSs3GPx1SWW0; bili_ticket_expires=1715047156; buvid4=4633C0F9-A85E-E7E8-E194-6E2A18F95B6116740-024050402-YSL4Y8j9yPQ4xf%2FwHi58Dg%3D%3D; buvid_fp=fbda979bc28293fc0d4e3ec0c241726d; rpdid=|(umkY)mY~mm0J'u~uR~))|u); sid=6kvjoki3; bsource=search_google; CURRENT_QUALITY=80; b_lsid=EB764D10B_18F42A3AE16; enable_web_push=DISABLE; header_theme_version=CLOSE; bmg_af_switch=1; bmg_src_def_domain=i1.hdslb.com; home_feed_column=5; browser_resolution=1920-919",
-                         })
+                        remove_merge_materials=True, debug_all=False, headers={})
     bilibili.start()
