@@ -11,12 +11,15 @@ import utils
 
 __all__ = ['Bilibili']
 
+version = '0.0.1'
+
 class Bilibili:
+    version = version
     def __init__(self, origin_url, **kwargs):
         if kwargs.get('base_dir') and os.path.isdir(kwargs['base_dir']):
             utils._base_dir = kwargs['base_dir']
         self.create_logger()
-        self.disable_console_log = kwargs.get('disable_console_log', False)
+        self.disable_console_log = kwargs.get('disable_console_log', False) #关闭，并不是没有控制台输出，而是简单的输出一些信息，详细可以看日志
         self.origin_url = origin_url #原始请求视频链接
         self.playlists_info = {} #存放所有剧集信息
         self.fetch_playlists = kwargs.get('fetch_playlists', False) #是否自动下载全部剧集
@@ -54,6 +57,14 @@ class Bilibili:
             __local_playlists_info = self.get_playlists_info_from_local()
             self.__local_already_download_p_list = \
                 [v['p_num'] for k,v in __local_playlists_info.items() if v['download_flag'] == 3]
+            if self.__local_already_download_p_list:
+                not_merged_p_list = [i for i in self.__local_already_download_p_list if not __local_playlists_info[i]['merge_flag']]
+                if not_merged_p_list:
+                    self.logger.info('first, merge previously downloaded videos/audios...')
+                    if self.disable_console_log:
+                        print(f"Note: {', '.join(['p'+str(i) for i in not_merged_p_list])} {'are' if len(not_merged_p_list) > 1 else 'is'} "
+                              f"downloaded but videos/audios not merged, merge {'them' if len(not_merged_p_list) > 1 else 'it'} firstly")
+                    __local_playlists_info = self.check_playlists_is_merged(playlists_info=__local_playlists_info)
         self.playlists_info = deepcopy(__local_playlists_info)
         if self.get_origin_url_and_analyse() is None: #对尚未下载完成的剧集页面进行获取并得到音视频下载地址等相关信息更新到self.playlists_info中
             return
@@ -82,6 +93,7 @@ class Bilibili:
             if self.playlists_info.get(i) is None:
                 continue
             playlists_info[i]['download_flag'] = self.playlists_info[i]['download_flag']
+            playlists_info[i]['merge_flag'] = self.playlists_info[i]['merge_flag']
             if self.playlists_info[i].get('video_save_path'):
                 playlists_info[i]['video_save_path'] = self.playlists_info[i]['video_save_path']
             if self.playlists_info[i].get('audio_save_path'):
@@ -125,6 +137,8 @@ class Bilibili:
                 origin_video_info = self.analyse_playinfo(req.text)
                 if origin_video_info is None:
                     self.logger.error(f'analyse origin {self.origin_url} html page failed')
+                    if self.disable_console_log:
+                        print(f'Error: analyse origin {self.origin_url} html page failed')
                     return None
                 if origin_video_info['p_num'] not in self.__local_already_download_p_list:
                     origin_video_info['download_flag'] = 0
@@ -135,10 +149,13 @@ class Bilibili:
                     self.logger.info(f'html analyse succeed: {str(origin_video_info)}')
                 quality_dict = {_1:_2['quality'] for _1, _2 in origin_video_info['video_info'].items()}
                 _desc = re.sub('\n',' ',origin_video_info['desc'])
-                self.logger.info(f"origin html({origin_video_info['url']}) analyse succeed\n{'(title):':>15}"
-                    f"{origin_video_info['title']}\n{'(desc):':>15}{_desc}\n"
-                    f"{'(episodes num):':>15}{origin_video_info['videos']}"
-                    f"\n{'(quality):':>15}{', '.join([_[1]+'(id:'+str(_[0])+')' for _ in quality_dict.items()])}")
+                video_main_info = f"{'(title):':>15}"\
+                    f"{origin_video_info['title']}\n{'(desc):':>15}{_desc}\n"\
+                    f"{'(episodes num):':>15}{origin_video_info['videos']}"\
+                    f"\n{'(quality):':>15}{', '.join([_[1]+'(id:'+str(_[0])+')' for _ in quality_dict.items()])}"
+                self.logger.info(f"origin html({origin_video_info['url']}) analyse succeed\n{video_main_info}")
+                if self.disable_console_log:
+                    print(f"{'(origin url):':>15}{self.origin_url}\n{video_main_info}")
                 if not ((origin_video_info['videos'] == len(self.__local_already_download_p_list)) and 
                         list(sorted(self.__local_already_download_p_list)) == list(range(1, origin_video_info['videos']+1))):
                     if self.quality == 'MANUAL':
@@ -151,7 +168,12 @@ class Bilibili:
                         self.__quality_id = min(quality_dict.keys())
                     else: #default is MAX quality
                         self.__quality_id = max(quality_dict.keys())
-                    self.logger.info(f'selected download quality({self.quality}):{self.__quality_id}')
+                    select_down_quality_info = f'selected download quality({self.quality}):{self.__quality_id}'
+                    self.logger.info(select_down_quality_info)
+                    if self.disable_console_log:
+                        print(select_down_quality_info)
+                        if self.__local_already_download_p_list:
+                            print(f"Note: {', '.join(['p'+str(_) for _ in self.__local_already_download_p_list])} has already been downloaded in {self.__output_dir}")
                 else:
                     self.logger.info(f'(all) videos has already been downloaded in {self.__output_dir}! '
                                      f'if you want to re-download, please delete {self.__local_playlists_info_path} or pass force_re_download param')
@@ -176,6 +198,9 @@ class Bilibili:
                                 new_add_info_num += 1
                                 if self.__download_at_once:
                                     self.download_by_playlists_info(which_p=sub_video_info['p_num'])
+                            else:
+                                if self.disable_console_log:
+                                    print(f'Error: analyse sub url {self.origin_url} html page failed')
                         except Exception as e:
                             self.logger.error(f'exception([{e.__traceback__.tb_frame.f_globals["__file__"]}:'
                                               f'{e.__traceback__.tb_lineno}] {e}) occurs when getting from {sub_url}')
@@ -275,8 +300,12 @@ class Bilibili:
                                              key=lambda x:get_idx_of_specific_codedc(x[1])):
                     #if not [_c for _c in download_specific_codec_video if codec_info.lower().startswith(_c.lower())]:
                     #    continue
-                    self.logger.info(f"start to download p{p}(video:{info['video_info'][best_quality]['quality']},"
-                                     f"{'x'.join([str(_) for _ in info['video_info'][best_quality]['size']])},{codec_info})...")
+                    downloading_video_info = f"start to download p{p}(video:{info['video_info'][best_quality]['quality']},"\
+                        f"{'x'.join([str(_) for _ in info['video_info'][best_quality]['size']])},{codec_info})"\
+                        f"{' from '+info['url'] if self.disable_console_log else ''}..."
+                    self.logger.info(downloading_video_info)
+                    if self.disable_console_log:
+                        print(downloading_video_info)
                     self.__crawler.url = url
                     self.__crawler.save_path = os.path.join(self.__output_dir, 
                         f"{info['title']}{'' if (0 == get_video_url_already_succeed) else '_'+str(get_video_url_already_succeed)}.mp4")
@@ -296,11 +325,15 @@ class Bilibili:
                     else:
                         self.__all_downloed_flag = False
                         self.logger.error(f"download video from {self.__crawler.url} failed for {self.__crawler.error_info}")
+                        if self.disable_console_log:
+                            print(f"Error: download p{p} video failed, you can re-exec this command later")
             else:
                 self.logger.info(f"p{p} video has been downloaded in {self.__output_dir}")
             if self.playlists_info[p]['download_flag'] == 0:
                 continue
             self.logger.info(f"start to download p{p}(audio)...")
+            if self.disable_console_log:
+                print(f"start to download p{p}(audio)...")
             self.__crawler.url = info['audio_url']
             self.__crawler.save_path = os.path.join(self.__output_dir, f"{info['title']}_audio.mp3") #audio may also be *.mp4 file which is the same with video filename
                                                                                             #in this case, we rename it to *.mp3
@@ -330,6 +363,8 @@ class Bilibili:
             else:
                 self.__all_downloed_flag = False
                 self.logger.error(f"download audio from {self.__crawler.url} failed for {self.__crawler.error_info}")
+                if self.disable_console_log:
+                    print(f"Error: download p{p} audio failed, you can re-exec this command later")
 
     def merge_video_and_audio(self, video_file, audio_file):
         if (not self.auto_merge) or (not self.__ffmpeg_exist):
@@ -357,39 +392,55 @@ class Bilibili:
                     os.remove(video_file)
                     os.remove(audio_file)
                     os.rename(merge_file, video_file)
+                    if self.disable_console_log:
+                        print(f"ffmpeg merge success, save into {video_file}")
                 else:
                     self.logger.info(f'success! runtime: {time.time()-start_time:.2f}s, the merged file is at {merge_file}')
+                    if self.disable_console_log:
+                        print(f"ffmpeg merge success, save into {merge_file}")
                 sys.stdout.flush()
                 return True
             self.logger.error('merge failed for unknown reason!')
+            if self.disable_console_log:
+                print('Error: merge failed for unknown reason!')
             sys.stdout.flush()
             return False
         except Exception as e:
             self.logger.error(f'merge failed for {e}!')
+            if self.disable_console_log:
+                print(f'Error: merge failed for {e}!')
         sys.stdout.flush()
         return False
 
-    def check_playlists_is_merged(self):
+    def check_playlists_is_merged(self, playlists_info=None):
         if (not self.auto_merge) or (not self.__ffmpeg_exist):
             return
         self.logger.info('check if all playlists\'s video and audio are all merged...')
-        n0 = len(self.playlists_info.keys()) #全部剧集总数
+        flag = False
+        if playlists_info is None:
+            playlists_info = self.playlists_info
+            flag = True
+        n0 = len(playlists_info.keys()) #全部剧集总数
         n1, n2, n3, n4 = 0, 0, 0, 0
-        for p in sorted(self.playlists_info.keys()):
-            if self.playlists_info[p]['download_flag'] == 3:
-                if not self.playlists_info[p]['merge_flag']:
-                    if not self.merge_video_and_audio(self.playlists_info[p]['video_save_path'], self.playlists_info[p]['audio_save_path']):
+        for p in sorted(playlists_info.keys()):
+            if playlists_info[p]['download_flag'] == 3:
+                if not playlists_info[p]['merge_flag']:
+                    if not self.merge_video_and_audio(playlists_info[p]['video_save_path'], playlists_info[p]['audio_save_path']):
                         n2 += 1 #此处最新合成失败的数量
                     else:
                         n4 += 1 #此处最新合成成功的数量
-                        self.playlists_info[p]['merge_flag'] = True
+                        playlists_info[p]['merge_flag'] = True
+                        if flag:
+                            self.playlists_info = playlists_info
                         self.save_playlists_info_into_local()
                 else:
                     n1 += 1 #之前已经合成的数量
             else:
                 n3 += 1 #视频尚未下载成功的数量
-        if (n1 == n0) or ((n1+n4) == n0): self.logger.info(f'all {n0} mv are merged!')
-        else: self.logger.info(f'{n0-(n1+n4)} mv not merge, in which {n3} mv not downloaded, {n2} mv (ffmpeg)merge failed!')
+        if flag:
+            if (n1 == n0) or ((n1+n4) == n0): self.logger.info(f'all {n0} mv are merged!')
+            else: self.logger.info(f'{n0-(n1+n4)} mv not merge, in which {n3} mv not downloaded, {n2} mv (ffmpeg)merge failed!')
+        return playlists_info
 
     @staticmethod
     def generate_bilibili_video_url(bvid, p=None):
@@ -435,10 +486,15 @@ class Bilibili:
             if ((not set_flag) and disable_console_log): pass
             elif ((not set_flag) and (not disable_console_log)) or \
                     (set_flag and self.__disable_console_log and (not disable_console_log)):
-                self.logger.addHandler(self.__console_log_handler)
+                if not Bilibili.logger_concole_handler_add_once:
+                    Bilibili.logger_concole_handler_add_once = True
+                    self.logger.addHandler(self.__console_log_handler)
             elif (set_flag and (not self.__disable_console_log) and disable_console_log):
                 self.logger.removeHandler(self.__console_log_handler)
         self.__disable_console_log = disable_console_log
+
+    logger_concole_handler_add_once = False
+    logger_file_handler_add_once = False
 
     def create_logger(self):
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -446,11 +502,15 @@ class Bilibili:
         self.__console_log_handler = logging.StreamHandler()
         self.__console_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s(%(funcName)s:%(lineno)s): %(message)s'))
         if hasattr(self, f'_{self.__class__.__name__}__disable_console_log') and (not self.disable_console_log):
-            self.logger.addHandler(self.__console_log_handler)
-        file_log_handler = RotatingFileHandler(filename='log', maxBytes=1024*1024, backupCount=3, encoding='utf-8') #logging.FileHandler(filename='log', encoding='utf-8')
-        file_log_handler.setFormatter(logging.Formatter('%(asctime)s[%(name)s] - %(pathname)s[line:%(lineno)d(%(funcName)s)] - %(levelname)s: %(message)s'))
-        file_log_handler.setLevel(logging.INFO)
-        self.logger.addHandler(file_log_handler)
+            if not Bilibili.logger_concole_handler_add_once:
+                Bilibili.logger_concole_handler_add_once = True
+                self.logger.addHandler(self.__console_log_handler)
+        if not Bilibili.logger_file_handler_add_once:
+            Bilibili.logger_file_handler_add_once = True
+            file_log_handler = RotatingFileHandler(filename='log', maxBytes=1024*1024, backupCount=3, encoding='utf-8') #logging.FileHandler(filename='log', encoding='utf-8')
+            file_log_handler.setFormatter(logging.Formatter('%(asctime)s[%(name)s] - %(pathname)s[line:%(lineno)d(%(funcName)s)] - %(levelname)s: %(message)s'))
+            file_log_handler.setLevel(logging.INFO)
+            self.logger.addHandler(file_log_handler)
 
     @staticmethod
     def check_tool(tool_name):
@@ -464,7 +524,7 @@ class Bilibili:
             return False
 
 if __name__ == '__main__':
-    bilibili = Bilibili('https://www.bilibili.com/video/BV1z84y1r7Tc', disable_console_log=False, 
-                        fetch_playlists=True, quality = 'MIN', force_re_download=False, base_dir='D:\\workspace\\ttt\\', auto_merge=True, ffmpeg_debug=False, 
+    bilibili = Bilibili('https://www.bilibili.com/video/BV1z84y1r7Tc', disable_console_log=True, 
+                        fetch_playlists=True, quality = 'MAX', force_re_download=False, base_dir='C:\\Users\\muggledy\\Downloads\\', auto_merge=True, ffmpeg_debug=False, 
                         remove_merge_materials=True, debug_all=False, headers={})
     bilibili.start()
