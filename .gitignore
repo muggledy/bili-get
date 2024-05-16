@@ -1,7 +1,9 @@
 /*
-!bili_get.py
-!utils.py
-!readme.md
-!__init__.py
+!/bili_get/
 !setup.py
+!readme.md
 !.gitignore
+/bili_get/*
+!/bili_get/__init__.py
+!/bili_get/bili_get.py
+!/bili_get/utils.py

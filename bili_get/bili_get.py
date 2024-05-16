@@ -1,20 +1,17 @@
-
-from utils import *
+from .utils import *
 import requests, logging, \
     re, json, pickle, os, \
-    subprocess, platform, sys, time
+    subprocess, platform, sys, \
+    time, argparse
 from logging.handlers import RotatingFileHandler
 #from lxml import etree
 from pathlib import Path
 from copy import deepcopy
-import utils
+from . import utils
 
-__all__ = ['Bilibili']
-
-version = '0.0.1'
+__all__ = ['Bilibili', 'main']
 
 class Bilibili:
-    version = version
     def __init__(self, origin_url, **kwargs):
         if kwargs.get('base_dir') and os.path.isdir(kwargs['base_dir']):
             utils._base_dir = kwargs['base_dir']
@@ -212,9 +209,14 @@ class Bilibili:
                     else:
                         self.logger.warning(f"{origin_video_info['videos'] - (new_add_info_num + len(self.__local_already_download_p_list))} "
                                          "sub videos info fetch failed!")
+                elif (origin_video_info['videos'] > 1) and (not self.fetch_playlists) \
+                        and (len(self.__local_already_download_p_list) < origin_video_info['videos']):
+                    print('Note: this is a multi-episode video, you can download them all at once with --playlist')
                 return self.playlists_info
             else:
                 self.logger.error(f"get {self.origin_url} failed and server return '{req.reason}'")
+                if self.disable_console_log:
+                    print(f"get {self.origin_url} failed and server return '{req.reason}'")
                 return None
         except Exception as e:
             self.logger.error(f'exception([{e.__traceback__.tb_frame.f_globals["__file__"]}:'
@@ -261,6 +263,7 @@ class Bilibili:
                 ret_info['title'] = f"p{ret_info['p_num']}_{window_initial_state['videoData']['title']}{'_'+_[0] if _ else ''}"
             else:
                 ret_info['title'] = window_initial_state['videoData']['title']
+            ret_info['title'] = self.normalize_filename(ret_info['title'])
             ret_info['desc'] = window_initial_state['videoData']['desc']
             ret_info['desc'] = '无' if not ret_info['desc'] else ret_info['desc']
             ret_info['url'] = self.generate_bilibili_video_url(ret_info['bvid'], 
@@ -475,6 +478,12 @@ class Bilibili:
 'Referer':'https://www.bilibili.com/'}
         self.__headers.update(headers)
 
+    @staticmethod
+    def normalize_filename(filename): #Windows文件名不能含有\/:*?"<>|
+        illegal_chars = r'\/:*?"<>|'
+        filename = ''.join(char for char in filename if char not in illegal_chars)
+        return filename
+
     @property
     def disable_console_log(self):
         return self.__disable_console_log
@@ -482,35 +491,37 @@ class Bilibili:
     @disable_console_log.setter
     def disable_console_log(self, disable_console_log):
         set_flag = hasattr(self, f'_{self.__class__.__name__}__disable_console_log')
-        if hasattr(self, f'_{self.__class__.__name__}__console_log_handler'):
-            if ((not set_flag) and disable_console_log): pass
-            elif ((not set_flag) and (not disable_console_log)) or \
-                    (set_flag and self.__disable_console_log and (not disable_console_log)):
-                if not Bilibili.logger_concole_handler_add_once:
+        if (self.logger is not None) and (self.logger_console_handler is not None):
+            if ((not set_flag) and disable_console_log):
+                self.logger.removeHandler(self.logger_console_handler)
+            elif (set_flag and self.__disable_console_log and (not disable_console_log)):
+                if not self.logger_concole_handler_add_once:
                     Bilibili.logger_concole_handler_add_once = True
-                    self.logger.addHandler(self.__console_log_handler)
+                    self.logger.addHandler(self.logger_console_handler)
             elif (set_flag and (not self.__disable_console_log) and disable_console_log):
-                self.logger.removeHandler(self.__console_log_handler)
+                self.logger.removeHandler(self.logger_console_handler)
         self.__disable_console_log = disable_console_log
 
+    logger = None
+    logger_console_handler = None
     logger_concole_handler_add_once = False
-    logger_file_handler_add_once = False
 
     def create_logger(self):
-        self.logger = logging.getLogger(self.__class__.__name__)
+        if self.logger is not None:
+            return
+        Bilibili.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.DEBUG) #logger.setLevel()对低于该等级的日志丢弃，否则再转发给FileHandler和StreamHandler处理，因此该等级必须最低
-        self.__console_log_handler = logging.StreamHandler()
-        self.__console_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s(%(funcName)s:%(lineno)s): %(message)s'))
-        if hasattr(self, f'_{self.__class__.__name__}__disable_console_log') and (not self.disable_console_log):
-            if not Bilibili.logger_concole_handler_add_once:
+        Bilibili.logger_console_handler = logging.StreamHandler()
+        self.logger_console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s(%(funcName)s:%(lineno)s): %(message)s'))
+        if not (hasattr(self, f'_{self.__class__.__name__}__disable_console_log') and self.disable_console_log):
+            if not self.logger_concole_handler_add_once:
                 Bilibili.logger_concole_handler_add_once = True
-                self.logger.addHandler(self.__console_log_handler)
-        if not Bilibili.logger_file_handler_add_once:
-            Bilibili.logger_file_handler_add_once = True
-            file_log_handler = RotatingFileHandler(filename='log', maxBytes=1024*1024, backupCount=3, encoding='utf-8') #logging.FileHandler(filename='log', encoding='utf-8')
-            file_log_handler.setFormatter(logging.Formatter('%(asctime)s[%(name)s] - %(pathname)s[line:%(lineno)d(%(funcName)s)] - %(levelname)s: %(message)s'))
-            file_log_handler.setLevel(logging.INFO)
-            self.logger.addHandler(file_log_handler)
+                self.logger.addHandler(self.logger_console_handler)
+        file_log_handler = RotatingFileHandler(filename=get_absolute_path(f'./bili_tmp/log'), 
+                                               maxBytes=1024*1024, backupCount=3, encoding='utf-8') #logging.FileHandler(filename='log', encoding='utf-8')
+        file_log_handler.setFormatter(logging.Formatter('%(asctime)s[%(name)s] - %(pathname)s[line:%(lineno)d(%(funcName)s)] - %(levelname)s: %(message)s'))
+        file_log_handler.setLevel(logging.INFO)
+        self.logger.addHandler(file_log_handler)
 
     @staticmethod
     def check_tool(tool_name):
@@ -523,8 +534,40 @@ class Bilibili:
         except subprocess.CalledProcessError:
             return False
 
+def main():
+    parser = argparse.ArgumentParser(description="A simple tool to download videos from bilibili{*≧∀≦}")
+    parser.add_argument('url', help='bilibili video url')
+    parser.add_argument('-q', '--quality', type=str, default='MAX', choices=['MAX', 'MIN', 'MANUAL'], help='select the video quality')
+    parser.add_argument('-c', '--cookie', type=str, default='', help='your bilibili website cookie')
+    parser.add_argument('-o', '--output', type=str, default='', help='videos and temp file\'s output directory, default is current working path')
+    parser.add_argument('--debug', action="store_true", help='open all debug')
+    parser.add_argument('--playlist', action="store_true", help='download video playlists')
+    parser.add_argument('--force', action="store_true", help='force to re-download videos')
+    parser.add_argument('--nomerge', action="store_true", help='don\'t auto merge videos and audios')
+    
+    args = parser.parse_args()
+    url = args.url
+    output = args.output
+    if (output=='') or os.path.isfile(output):
+        output = Path.cwd()
+    else:
+        output = os.path.normpath(output)
+        if not os.path.isdir(output):
+            os.makedirs(output)
+    if args.debug:
+        print(f"params: url({url}), quality({args.quality}), cookie({args.cookie if args.cookie else 'None'}), "
+              f"output({output}), download_playlist({args.playlist}), force_download({args.force}), not_merge({args.nomerge})")
+    else:
+        print(f'output: {output}')
+    bilibili = Bilibili(url, disable_console_log=False if args.debug else True, 
+        fetch_playlists=args.playlist, quality=args.quality, force_re_download=args.force, base_dir=output, 
+        auto_merge=True if not args.nomerge else False, ffmpeg_debug=True if args.debug else False, 
+        remove_merge_materials=True, debug_all=args.debug, headers={'Cookie':args.cookie} if args.cookie!='' else {})
+    bilibili.start()
+
 if __name__ == '__main__':
-    bilibili = Bilibili('https://www.bilibili.com/video/BV1z84y1r7Tc', disable_console_log=True, 
+    '''bilibili = Bilibili('https://www.bilibili.com/video/BV1z84y1r7Tc', disable_console_log=True, 
                         fetch_playlists=True, quality = 'MAX', force_re_download=False, base_dir='C:\\Users\\muggledy\\Downloads\\', auto_merge=True, ffmpeg_debug=False, 
                         remove_merge_materials=True, debug_all=False, headers={})
-    bilibili.start()
+    bilibili.start()'''
+    pass

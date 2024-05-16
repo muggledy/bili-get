@@ -14,6 +14,7 @@ def get_absolute_path(relative_path):
         ('' if os.path.split(relative_path)[1] else '\\')
     parent_dir = os.path.dirname(absolute_path)
     if not os.path.exists(parent_dir):
+        if _utils_debug: print(f'create directory: {parent_dir}')
         os.makedirs(parent_dir)
     return absolute_path
 
