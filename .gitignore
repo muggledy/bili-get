@@ -1,9 +1,10 @@
 /*
-!/bili_get/
+!/sole_bili_get/
 !setup.py
 !readme.md
 !.gitignore
-/bili_get/*
-!/bili_get/__init__.py
-!/bili_get/bili_get.py
-!/bili_get/utils.py
+!LICENSE.txt
+/sole_bili_get/*
+!/sole_bili_get/__init__.py
+!/sole_bili_get/bili_get.py
+!/sole_bili_get/utils.py

@@ -1,6 +1,14 @@
 # Bilibili视频下载器
 
-使用方式（demo）：
+<a alt="null">![](https://img.shields.io/badge/python-3.6+-green)<a href="https://pypi.org/project/sole-bili-get/0.0.1/" alt="null"><img src="https://img.shields.io/github/v/release/muggledy/bili-get"/></a></a>
+
+## 下载
+
+```console
+pip install sole-bili-get -i https://www.pypi.org/simple/
+```
+
+## 使用
 
 ```console
 (python39) C:\Users\muggledy\Downloads>bili-get https://www.bilibili.com/video/BV1CY4y1F7hP
@@ -25,4 +33,8 @@ Note: this is a multi-episode video, you can download them all at once with --pl
 - `-q`或`--quality`用于指定要下载的视频质量（清晰度），可选值有`MAX`（最高质量，缺省值）、`MIN`（最低质量）、`MANUAL`（手动选择视频质量）
 - `--debug`用于在控制台输出全部debug日志信息，不指定该参数，也会将日志输出到`bili_tmp/log`中以备查阅
 - `--force`表示强制重新下载视频
-- `--nomerge`表示是否自动合成下载下来的音视频文件，默认合成，但需要提前下载`ffmpeg`工具并将其路径添加到`PATH`环境变量
+- `--nomerge`表示是否自动合成下载下来的音视频文件，默认合成，但需要提前下载[ffmpeg](https://ffmpeg.org/download.html)工具并将其路径添加到`PATH`环境变量
+
+## 致谢
+
+如果觉得本工具有用，请点个Star呗~，有bug或有改进意见请提issue，thx！
