@@ -54,14 +54,16 @@ class Bilibili:
             __local_playlists_info = self.get_playlists_info_from_local()
             self.__local_already_download_p_list = \
                 [v['p_num'] for k,v in __local_playlists_info.items() if v['download_flag'] == 3]
-            if self.__local_already_download_p_list:
+            if self.__local_already_download_p_list and self.__ffmpeg_exist:
                 not_merged_p_list = [i for i in self.__local_already_download_p_list if not __local_playlists_info[i]['merge_flag']]
                 if not_merged_p_list:
                     self.logger.info('first, merge previously downloaded videos/audios...')
                     if self.disable_console_log:
                         print(f"Note: {', '.join(['p'+str(i) for i in not_merged_p_list])} {'are' if len(not_merged_p_list) > 1 else 'is'} "
                               f"downloaded but videos/audios not merged, merge {'them' if len(not_merged_p_list) > 1 else 'it'} firstly")
-                    __local_playlists_info = self.check_playlists_is_merged(playlists_info=__local_playlists_info)
+                    updated_local_playlists_info = self.check_playlists_is_merged(playlists_info=__local_playlists_info)
+                    if updated_local_playlists_info is not None:
+                        __local_playlists_info = updated_local_playlists_info
         self.playlists_info = deepcopy(__local_playlists_info)
         if self.get_origin_url_and_analyse() is None: #对尚未下载完成的剧集页面进行获取并得到音视频下载地址等相关信息更新到self.playlists_info中
             return
@@ -71,7 +73,9 @@ class Bilibili:
                 self.__all_downloed_flag = True #先预设能够全部下载成功，如果有一个失败了，则再置为False
         else:
             if self.auto_merge:
-                if not self.__ffmpeg_exist: self.logger.warning(ffmpeg_not_exist_prompt)
+                if not self.__ffmpeg_exist:
+                    self.logger.warning(ffmpeg_not_exist_prompt)
+                    if self.disable_console_log: print(f'Note: {ffmpeg_not_exist_prompt}')
                 else: self.check_playlists_is_merged()
             return
         self.download_by_playlists_info()
@@ -82,6 +86,8 @@ class Bilibili:
         if self.auto_merge:
             if not self.__ffmpeg_exist:
                 self.logger.warning(ffmpeg_not_exist_prompt)
+                if self.disable_console_log:
+                    print(f'Note: {ffmpeg_not_exist_prompt}')
             else:
                 self.check_playlists_is_merged()
 
@@ -171,6 +177,8 @@ class Bilibili:
                         print(select_down_quality_info)
                         if self.__local_already_download_p_list:
                             print(f"Note: {', '.join(['p'+str(_) for _ in self.__local_already_download_p_list])} has already been downloaded in {self.__output_dir}")
+                    if not ((not self.fetch_playlists) and (origin_video_info['p_num'] in self.__local_already_download_p_list)):
+                        self.get_danmu_urls()
                 else:
                     self.logger.info(f'(all) videos has already been downloaded in {self.__output_dir}! '
                                      f'if you want to re-download, please delete {self.__local_playlists_info_path} or pass force_re_download param')
@@ -298,6 +306,12 @@ class Bilibili:
                                        for i,q in enumerate(available_qualities)], key=lambda x:x[1])[0][0]
             best_quality = available_qualities[best_quality_idx]
             get_video_url_already_succeed = 0
+            if self.danmu_urls.get(p):
+                if self.download_danmu_xml(self.danmu_urls[p], save_path=os.path.join(self.__output_dir, f"{info['title']}.xml")):
+                    danmu_ok_prompt = f"p{p} danmu xml file is downloaded into "+os.path.join(self.__output_dir, f"{info['title']}.xml")
+                    self.logger.info(danmu_ok_prompt+f" from {self.danmu_urls[p]}")
+                    if self.disable_console_log: print(danmu_ok_prompt)
+                    self.playlists_info[p]['danmu_url'] = self.danmu_urls[p]
             if self.playlists_info[p]['download_flag'] != 1:
                 for url,codec_info in sorted(info['video_info'][best_quality]['urls'], 
                                              key=lambda x:get_idx_of_specific_codedc(x[1])):
@@ -443,7 +457,7 @@ class Bilibili:
         if flag:
             if (n1 == n0) or ((n1+n4) == n0): self.logger.info(f'all {n0} mv are merged!')
             else: self.logger.info(f'{n0-(n1+n4)} mv not merge, in which {n3} mv not downloaded, {n2} mv (ffmpeg)merge failed!')
-        return playlists_info
+        return (playlists_info if not flag else None) #只有在传入非None的playlists_info时，才返回更新后的它，否则返回None
 
     @staticmethod
     def generate_bilibili_video_url(bvid, p=None):
@@ -465,6 +479,30 @@ class Bilibili:
             local_playlists_info = pickle.load(f)
         self.logger.info(f'load local playlists info from {self.__local_playlists_info_path}')
         return local_playlists_info
+
+    def get_danmu_urls(self):
+        api = 'https://api.bilibili.com/x/web-interface/view?bvid=' + self.__bvid
+        try:
+            json = requests.get(api, headers=self.headers).json()
+            danmu_url = lambda cid: "https://comment.bilibili.com/"+str(cid)+".xml"
+            self.danmu_urls = {page['page']:danmu_url(page['cid']) for page in json['data']['pages']}
+            self.logger.info(f'get danmu urls success for {len(self.danmu_urls)} episodes({self.danmu_urls})')
+            if self.disable_console_log:
+                print(f'get danmu urls success for {len(self.danmu_urls)} episodes')
+        except Exception as e:
+            self.logger.error(f"get video info from api {api} failed for {e}, thus can't download danmu")
+            self.danmu_urls = {}
+        return self.danmu_urls
+
+    def download_danmu_xml(self, url, save_path):
+        try:
+            response = requests.get(url, headers=self.headers)
+            response.encoding = 'utf-8'
+            Path(save_path).write_text(response.text, encoding='utf-8')
+            return True
+        except Exception as e:
+            self.logger.error(f"get danmu xml file from {url} failed for {e}")
+        return False
 
     @property
     def headers(self):
