@@ -21,6 +21,7 @@ class Bilibili:
         self.playlists_info = {} #存放所有剧集信息
         self.fetch_playlists = kwargs.get('fetch_playlists', False) #是否自动下载全部剧集
         self.headers = kwargs.get('headers', {})
+        self.cookies = kwargs.get('cookies', None)
         self.quality = kwargs.get('quality', 'MAX').upper() #下载质量选择：MAX, MIN, MANUAL
         self.force_re_download = kwargs.get('force_re_download', False)
         self.ffmpeg_debug = kwargs.get('ffmpeg_debug', False)
@@ -131,7 +132,7 @@ class Bilibili:
         try:
             new_add_info_num = 0
             start_time = time.time()
-            req = requests.get(self.origin_url, headers=self.headers)
+            req = requests.get(self.origin_url, headers=self.headers, cookies=self.cookies)
             if req.ok:
                 if self.debug_all:
                     local_file = get_absolute_path(f"./bili_tmp/original_url_{self.__bvid}.html")
@@ -193,7 +194,7 @@ class Bilibili:
                             continue
                         try:
                             sub_url = self.generate_bilibili_video_url(origin_video_info['bvid'], p)
-                            sub_req = requests.get(sub_url, headers=self.headers)
+                            sub_req = requests.get(sub_url, headers=self.headers, cookies=self.cookies)
                             sub_video_info = self.analyse_playinfo(sub_req.text)
                             self.logger.info(f"get and analyse sub url {sub_url} {'succeed' if sub_video_info else 'failed'}")
                             if sub_video_info is not None:
@@ -397,6 +398,8 @@ class Bilibili:
             os.remove(merge_file)
         cmd = f"ffmpeg -i \"{video_file}\" -i \"{audio_file}\" -c:v copy -c:a aac -strict experimental \"{merge_file}\""
         self.logger.info(f'start merging audio and video files by exec "{cmd}"')
+        if self.disable_console_log:
+            print(f'start ffmpeg merging...')
         try:
             start_time = time.time()
             if self.ffmpeg_debug or self.debug_all:
@@ -483,9 +486,10 @@ class Bilibili:
     def get_danmu_urls(self):
         api = 'https://api.bilibili.com/x/web-interface/view?bvid=' + self.__bvid
         try:
-            json = requests.get(api, headers=self.headers).json()
+            response = requests.get(api, headers=self.headers)
+            response.raise_for_status()
             danmu_url = lambda cid: "https://comment.bilibili.com/"+str(cid)+".xml"
-            self.danmu_urls = {page['page']:danmu_url(page['cid']) for page in json['data']['pages']}
+            self.danmu_urls = {page['page']:danmu_url(page['cid']) for page in response.json()['data']['pages']}
             self.logger.info(f'get danmu urls success for {len(self.danmu_urls)} episodes({self.danmu_urls})')
             if self.disable_console_log:
                 print(f'get danmu urls success for {len(self.danmu_urls)} episodes')
@@ -592,15 +596,19 @@ def main():
         output = os.path.normpath(output)
         if not os.path.isdir(output):
             os.makedirs(output)
+    if args.cookie:
+        cookies = parse_cookies(args.cookie)
+    else:
+        cookies = None
     if args.debug:
-        print(f"params: url({url}), quality({args.quality}), cookie({args.cookie if args.cookie else 'None'}), "
+        print(f"params: url({url}), quality({args.quality}), cookie({str(cookies)}), "
               f"output({output}), download_playlist({args.playlist}), force_download({args.force}), not_merge({args.nomerge})")
     else:
         print(f'output: {output}')
     bilibili = Bilibili(url, disable_console_log=False if args.debug else True, 
         fetch_playlists=args.playlist, quality=args.quality, force_re_download=args.force, base_dir=output, 
         auto_merge=True if not args.nomerge else False, ffmpeg_debug=True if args.debug else False, 
-        remove_merge_materials=True, debug_all=args.debug, headers={'Cookie':args.cookie} if args.cookie!='' else {})
+        remove_merge_materials=True, debug_all=args.debug, headers={}, cookies=cookies)
     bilibili.start()
 
 if __name__ == '__main__':
