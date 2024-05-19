@@ -1,7 +1,7 @@
 import os, re, requests, hashlib, pickle
 from contextlib import closing
 
-__all__ = ["get_absolute_path", "find_json_dict_from_text", "Crawler"]
+__all__ = ["get_absolute_path", "find_json_dict_from_text", "Crawler", "parse_cookies"]
 
 _utils_debug = False
 _base_dir = os.path.dirname(__file__)
@@ -81,6 +81,7 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
     def __init__(self, url, **kwargs):
         self.url = url
         self.headers = kwargs.get('headers', {})
+        self.cookies = kwargs.get('cookies', None)
         self.save_path = kwargs.get('save_path', None)
         self.chunk_size = kwargs.get('chunk_size', 1024*1024*2) #默认单次请求最大值设为2MB
         self.show_progress = kwargs.get('show_progress', True)
@@ -109,8 +110,8 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                 if (self.save_path is not None) and os.path.exists(self.save_path):
                     if _utils_debug: print(f'remove {self.save_path} for no record in {self.download_info_file}')
                     os.remove(self.save_path)
-            if _utils_debug: print(f'headers = {self.headers}')
-            with closing(requests.get(self.url, headers=self.headers, stream=True)) as response:
+            if _utils_debug: print(f'headers = {self.headers}, cookies = {str(self.cookies)}')
+            with closing(requests.get(self.url, headers=self.headers, cookies=self.cookies, stream=True)) as response:
                 #print(response.headers)
                 if not response.ok:
                     if _utils_debug: print(f'Error: request get {self.url} failed for {response.reason}')
@@ -210,6 +211,14 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
         data.update({self.url : (self.save_path, already_download, downloaded_bytes)})
         with open(self.download_info_file, 'wb') as f:
             pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
+
+def parse_cookies(cookies_str):
+    cookies_dict = {}
+    for cookie in cookies_str.split('; '):
+        if '=' in cookie:
+            key, value = cookie.split('=', 1)
+            cookies_dict[key] = value
+    return cookies_dict
 
 if __name__ == '__main__':
     #测试断点续传功能
