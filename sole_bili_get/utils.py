@@ -1,4 +1,4 @@
-import os, re, requests, hashlib, pickle
+import os, re, requests, hashlib, pickle, platform
 from contextlib import closing
 
 __all__ = ["get_absolute_path", "find_json_dict_from_text", "Crawler", "parse_cookies"]
@@ -11,8 +11,9 @@ def get_absolute_path(relative_path):
         os.path.normpath(os.path.join(\
         _base_dir, relative_path))
     absolute_path += \
-        ('' if os.path.split(relative_path)[1] else '\\')
-    parent_dir = os.path.dirname(absolute_path)
+        ('' if os.path.split(relative_path)[1] else 
+        ('\\' if platform.system() == 'Windows' else '/'))
+    parent_dir = os.path.dirname(absolute_path) #os.path.dirname('c:\\xxx\\yyy\\') returns "c:\\xxx\\yyy"
     if not os.path.exists(parent_dir):
         if _utils_debug: print(f'create directory: {parent_dir}')
         os.makedirs(parent_dir)

@@ -68,24 +68,20 @@ class Bilibili:
         self.playlists_info = deepcopy(__local_playlists_info)
         if self.get_origin_url_and_analyse() is None: #对尚未下载完成的剧集页面进行获取并得到音视频下载地址等相关信息更新到self.playlists_info中
             return
-        if not self.__all_downloed_flag:
-            self.save_playlists_info_into_local()
-            if not self.__download_at_once:
-                self.__all_downloed_flag = True #先预设能够全部下载成功，如果有一个失败了，则再置为False
-        else:
-            if self.auto_merge:
-                if not self.__ffmpeg_exist:
-                    self.logger.warning(ffmpeg_not_exist_prompt)
-                    if self.disable_console_log: print(f'Note: {ffmpeg_not_exist_prompt}')
-                else: self.check_playlists_is_merged()
-            return
-        self.download_by_playlists_info()
+        if not self.__download_at_once:
+            self.__all_downloed_flag = True #先预设能够全部下载成功，如果有一个失败了，则再置为False
+            self.download_by_playlists_info()
+        total, downloaded, not_download, download_failed, merged, not_merge, merge_failed = self.get_current_downloaded_info()
+        self.logger.info(f"total:{total}, downloaded:{downloaded}, not_download:{not_download}, download_failed:{download_failed}, "
+                         f"merged:{merged}, not_merge:{not_merge}, merge_failed:{merge_failed}")
         if self.__all_downloed_flag:
-            self.logger.info(f'(all) videos has already been downloaded in {self.__output_dir}!')
+            if total == downloaded:
+                self.logger.info(f'(all) videos has already been downloaded in {self.__output_dir}!')
         else:
+            self.save_playlists_info_into_local()
             self.logger.info('some videos/audios download failed, you can re-exec command to download them')
         if self.auto_merge:
-            if not self.__ffmpeg_exist:
+            if not self.__ffmpeg_exist and downloaded != 0:
                 self.logger.warning(ffmpeg_not_exist_prompt)
                 if self.disable_console_log:
                     print(f'Note: {ffmpeg_not_exist_prompt}')
@@ -103,6 +99,22 @@ class Bilibili:
             if self.playlists_info[i].get('audio_save_path'):
                 playlists_info[i]['audio_save_path'] = self.playlists_info[i]['audio_save_path']
         self.playlists_info.update(playlists_info)
+
+    def get_current_downloaded_info(self): #返回：(剧集总数,已下载,未下载,下载失败,已合入,未合入,合入失败)
+        if not self.playlists_info:
+            return (0,0,0,0,0,0,0)
+        current_info = sorted([(p_num, info['download_flag'], info['merge_flag']) for p_num, info in self.playlists_info.items()], key=lambda x:x[0])
+        total = self.playlists_info[current_info[0][0]]['videos']
+        downloaded = len([info for info in current_info if info[1] == 3])
+        not_download = total - len(current_info)
+        download_failed = len(current_info) - downloaded
+        if self.__ffmpeg_exist:
+            merged = len([info for info in current_info if info[2]])
+            not_merge = not_download
+            merge_failed = len(current_info) - merged
+        else:
+            merged, not_merge, merge_failed = 0, total, 0
+        return (total, downloaded, not_download, download_failed, merged, not_merge, merge_failed)
 
     @property
     def origin_url(self):
@@ -308,8 +320,8 @@ class Bilibili:
             best_quality = available_qualities[best_quality_idx]
             get_video_url_already_succeed = 0
             if self.danmu_urls.get(p):
-                if self.download_danmu_xml(self.danmu_urls[p], save_path=os.path.join(self.__output_dir, f"{info['title']}.xml")):
-                    danmu_ok_prompt = f"p{p} danmu xml file is downloaded into "+os.path.join(self.__output_dir, f"{info['title']}.xml")
+                if self.download_danmu_xml(self.danmu_urls[p], save_path=os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}.xml"))):
+                    danmu_ok_prompt = f"p{p} danmu xml file is downloaded into "+os.path.normpath(os.path.join(os.path.join(self.__output_dir, f"{info['title']}.xml")))
                     self.logger.info(danmu_ok_prompt+f" from {self.danmu_urls[p]}")
                     if self.disable_console_log: print(danmu_ok_prompt)
                     self.playlists_info[p]['danmu_url'] = self.danmu_urls[p]
@@ -325,8 +337,8 @@ class Bilibili:
                     if self.disable_console_log:
                         print(downloading_video_info)
                     self.__crawler.url = url
-                    self.__crawler.save_path = os.path.join(self.__output_dir, 
-                        f"{info['title']}{'' if (0 == get_video_url_already_succeed) else '_'+str(get_video_url_already_succeed)}.mp4")
+                    self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, 
+                        f"{info['title']}{'' if (0 == get_video_url_already_succeed) else '_'+str(get_video_url_already_succeed)}.mp4"))
                     if self.force_re_download and os.path.exists(self.__crawler.save_path):
                         self.logger.warning(f'delete old p{p} video file {self.__crawler.save_path} for force_re_download')
                         os.remove(self.__crawler.save_path)
@@ -353,8 +365,8 @@ class Bilibili:
             if self.disable_console_log:
                 print(f"start to download p{p}(audio)...")
             self.__crawler.url = info['audio_url']
-            self.__crawler.save_path = os.path.join(self.__output_dir, f"{info['title']}_audio.mp3") #audio may also be *.mp4 file which is the same with video filename
-                                                                                            #in this case, we rename it to *.mp3
+            self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}_audio.mp3")) #audio may also be *.mp4 file 
+                                                        #which is the same with video filename in this case, we rename it to *.mp3
             if self.force_re_download and os.path.exists(self.__crawler.save_path):
                 self.logger.warning(f'delete old p{p} audio file {self.__crawler.save_path} for force_re_download')
                 os.remove(self.__crawler.save_path)
@@ -364,10 +376,11 @@ class Bilibili:
                 self.logger.info(f"download audio from {self.__crawler.url} into {self.__crawler.save_path} succeed, runtime: {time.time()-start_time:.2f}s")
                 if os.path.exists(self.__crawler.save_path):
                     if self.playlists_info[p].get('video_save_path') and \
-                        (self.playlists_info[p]['video_save_path'] == os.path.join(self.__output_dir, f"{info['title']}{os.path.splitext(self.__crawler.save_path)[1]}")):
-                        self.playlists_info[p]['audio_save_path'] = os.path.join(self.__output_dir, f"{info['title']}.mp3")
+                            (self.playlists_info[p]['video_save_path'] == \
+                            os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}{os.path.splitext(self.__crawler.save_path)[1]}"))):
+                        self.playlists_info[p]['audio_save_path'] = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}.mp3"))
                     else:
-                        self.playlists_info[p]['audio_save_path'] = os.path.join(self.__output_dir, f"{info['title']}{os.path.splitext(self.__crawler.save_path)[1]}")
+                        self.playlists_info[p]['audio_save_path'] = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}{os.path.splitext(self.__crawler.save_path)[1]}"))
                     self.logger.warning(f'rename audio file {self.__crawler.save_path} => {self.playlists_info[p]["audio_save_path"]}')
                     if os.path.exists(self.playlists_info[p]['audio_save_path']):
                         os.remove(self.playlists_info[p]['audio_save_path'])
@@ -601,7 +614,7 @@ def main():
     else:
         cookies = None
     if args.debug:
-        print(f"params: url({url}), quality({args.quality}), cookie({str(cookies)}), "
+        print(f"input params: url({url}), quality({args.quality}), cookie({str(cookies)}), "
               f"output({output}), download_playlist({args.playlist}), force_download({args.force}), not_merge({args.nomerge})")
     else:
         print(f'output: {output}')
