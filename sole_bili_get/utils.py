@@ -125,6 +125,8 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                 elif (suffix != '.unknown') and (not self.save_path.endswith(suffix)):
                     old_path = self.save_path
                     split_save_path = os.path.splitext(self.save_path)
+                    if (split_save_path[-1] != '') and re.findall(r'[\u4e00-\u9fa5]+', split_save_path[-1]): #避免“哈哈.图片”这种中文名称中含“.”的被错误切割为('哈哈', '.图片')
+                        split_save_path = (self.save_path, '')
                     if split_save_path[-1] != '':
                         self.save_path = split_save_path[0] + '.' + suffix
                     else:

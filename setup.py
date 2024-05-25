@@ -1,4 +1,4 @@
-import setuptools
+import setuptools, platform
 from sole_bili_get import __version__, __name__
 
 '''
@@ -15,6 +15,19 @@ bili-get --help
 with open("readme.md", "r", encoding="utf-8") as f:
     long_description = f.read()
 
+install_requires_common = [
+    'requests',
+]
+install_requires_windows = install_requires_common + [
+    'pycryptodome', 'pypiwin32',
+]
+install_requires_linux = install_requires_common + []
+
+if platform.system() == 'Windows':
+    install_requires = install_requires_windows
+else:
+    install_requires = install_requires_linux
+
 setuptools.setup(
     name=__name__,
     version=__version__,
@@ -27,9 +40,7 @@ setuptools.setup(
     license="MIT",
     packages=setuptools.find_packages(),
     python_requires=">=3.6",
-    install_requires=[
-        'requests',
-    ],
+    install_requires=install_requires,
     classifiers=[
         "License :: OSI Approved :: MIT License",
         'Operating System :: Microsoft :: Windows',

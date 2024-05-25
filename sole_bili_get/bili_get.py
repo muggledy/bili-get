@@ -8,6 +8,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from copy import deepcopy
 from . import utils
+if platform.system() == 'Windows':
+    from .chrome_cookie import get_bilibili_cookie
 
 __all__ = ['Bilibili', 'main']
 
@@ -83,10 +85,15 @@ class Bilibili:
                          f"merged:{merged}, not_merge:{not_merge}, merge_failed:{merge_failed}")
         if self.__all_downloed_flag:
             if total == downloaded:
-                self.logger.info(f'(all) videos has already been downloaded in {self.__output_dir}!')
+                all_download_ok_prompt = f'{"(all)videos have" if total>1 else "This video has"} already been downloaded in {self.__output_dir}!'
+                self.logger.info(all_download_ok_prompt)
+                if self.disable_console_log:
+                    print(all_download_ok_prompt)
         else:
             self.save_playlists_info_into_local()
             self.logger.info('some videos/audios download failed, you can re-exec command to download them')
+            if self.disable_console_log:
+                print('some videos/audios download failed, you can re-exec command to download them')
         if self.auto_merge:
             if not self.__ffmpeg_exist and downloaded != 0:
                 self.logger.warning(ffmpeg_not_exist_prompt)
@@ -176,6 +183,7 @@ class Bilibili:
                 _desc = re.sub('\n',' ',origin_video_info['desc'])
                 video_main_info = f"{'(title):':>15}"\
                     f"{origin_video_info['title']}\n{'(desc):':>15}{_desc}\n"\
+                    f"{'(author):':>15}{origin_video_info['author']['name']}\n"\
                     f"{'(episodes num):':>15}{origin_video_info['videos']}"\
                     f"\n{'(quality):':>15}{', '.join([_[1]+'(id:'+str(_[0])+')' for _ in quality_dict.items()])}"
                 self.logger.info(f"origin html({origin_video_info['url']}) analyse succeed\n{video_main_info}")
@@ -334,6 +342,12 @@ class Bilibili:
                     self.logger.info(danmu_ok_prompt+f" from {self.danmu_urls[p]}")
                     if self.disable_console_log: print(danmu_ok_prompt)
                     self.playlists_info[p]['danmu_url'] = self.danmu_urls[p]
+            self.__crawler.url = self.playlists_info[p]['cover']
+            self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}"))
+            if self.__crawler.get(): #视频封面只是附带下载，不保证下载成功
+                self.logger.info(f'p{p} cover is downloaded into {self.__crawler.save_path}')
+                if self.disable_console_log:
+                    print(f'p{p} cover is downloaded into {self.__crawler.save_path}')
             if self.playlists_info[p]['download_flag'] != 1:
                 for url,codec_info in sorted(info['video_info'][best_quality]['urls'], 
                                              key=lambda x:get_idx_of_specific_codedc(x[1])):
@@ -601,7 +615,7 @@ class Bilibili:
             if not self.logger_concole_handler_add_once:
                 Bilibili.logger_concole_handler_add_once = True
                 self.logger.addHandler(self.logger_console_handler)
-        file_log_handler = RotatingFileHandler(filename=get_absolute_path(f'./bili_tmp/log'), 
+        file_log_handler = RotatingFileHandler(filename=get_absolute_path(f'./bili_tmp/download.log'), 
                                                maxBytes=1024*1024, backupCount=3, encoding='utf-8') #logging.FileHandler(filename='log', encoding='utf-8')
         file_log_handler.setFormatter(logging.Formatter('%(asctime)s[%(name)s] - %(pathname)s[line:%(lineno)d(%(funcName)s)] - %(levelname)s: %(message)s'))
         file_log_handler.setLevel(logging.INFO)
@@ -638,7 +652,16 @@ def main():
         output = os.path.normpath(output)
         if not os.path.isdir(output):
             os.makedirs(output)
+    utils._base_dir = output #for chrome_cookie.py
+    if args.debug:
+        utils._utils_debug = True #for chrome_cookie.py
     if args.cookie:
+        if (platform.system() == 'Windows') and (args.cookie.lower().strip() == 'chrome'):
+            bili_ck = get_bilibili_cookie()
+            if bili_ck is not None:
+                args.cookie = bili_ck
+            else:
+                print('(ignore)get bilibili cookie from local for chrome failed')
         cookies = parse_cookies(args.cookie)
     else:
         cookies = None

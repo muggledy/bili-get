@@ -42,7 +42,7 @@ ffmpeg merge success, save into C:\Users\muggledy\Downloads\bili_output\BV1CY4y1
 Note: this is a multi-episode video, you can download them all at once with --playlist
 ```
 
-- 默认是下载到当前工作路径，可以通过`-o`或`--output`指定输出目录，不存在则自动创建，譬如`bili-get https://www.bilibili.com/video/BV1CY4y1F7hP -o D:\workspace\bilibili`。这会在`--output`目录下产生两个文件夹：`bili_tmp/`和`bili_output/`，前者存放一些临时文件，用于记录多剧集视频的下载进度，如果下载过程中发生中断，重新执行命令可以继续下载过程（且对于尚未合成的剧集会尝试进行合成，除非指定`--nomerge`参数），后者则是视频、音频、弹幕文件的输出文件夹
+- 默认是下载到当前工作路径，可以通过`-o`或`--output`指定输出目录，不存在则自动创建，譬如`bili-get https://www.bilibili.com/video/BV1CY4y1F7hP -o D:\workspace\bilibili`。这会在`--output`目录下产生两个文件夹：`bili_tmp/`和`bili_output/`，前者存放一些临时文件，用于记录多剧集视频的下载进度，如果下载过程中发生中断，重新执行命令可以继续下载过程（且对于尚未合成的剧集会尝试进行合成，除非指定`--nomerge`参数），后者则是视频、音频、封面、弹幕文件的输出文件夹
 
 - 对于多剧集视频，可以指定`--playlist`自动下载全部剧集，只要不删除对应的`bili_tmp/`临时文件，可以任意重复执行下载命令，如`bili-get https://www.bilibili.com/video/BV1CY4y1F7hP --playlist`，也不会重复下载，如果UP主新发布了剧集，则会继续下载
 
@@ -71,13 +71,17 @@ Note: this is a multi-episode video, you can download them all at once with --pl
 
   ![B站cookie获取方式](https://raw.githubusercontent.com/muggledy/bili-get/master/bilibili_cookie.jpg)
 
+  注：如果是Windows平台使用Chrome浏览器，可以指定`-c`参数为`chrome`，程序将自动从`./AppData/Local/Google/Chrome/User Data/default/Network/Cookies`读取B站的Cookie信息，譬如我们可以通过`bili-get https://www.bilibili.com/video/BV18G411D7FM -c chrome`命令下载1080p视频
+
 - `-q`或`--quality`用于指定要下载的视频质量（清晰度），可选值有`MAX`（最高质量，缺省值）、`MIN`（最低质量）、`MANUAL`（手动选择视频质量）
 
 - `--nomerge`表示是否自动合成下载下来的音视频文件，默认合成，但需要提前下载[ffmpeg](https://ffmpeg.org/download.html)工具（如[windows版本](https://www.gyan.dev/ffmpeg/builds/)）并将其路径添加到`PATH`环境变量
 
 - `--force`表示强制重新下载视频，如果没有指定`--playlist`参数，则只是重新下载当前剧集，否则会直接删除`bili_tmp/`临时文件，重新下载全部剧集，但不会立即删除全部已下载音视频文件，而是覆盖更新
 
-- `--debug`用于在控制台输出全部debug日志信息，不指定该参数，也会将日志输出到`bili_tmp/log`中以备查阅
+- `--debug`用于在控制台输出全部debug日志信息，不指定该参数，也会将日志输出到`bili_tmp/download.log`中以备查阅
+
+- 默认随视频会下载封面图片
 
 - 默认随视频会下载弹幕XML文件，可以使用[danmu2ass](https://github.com/ikde/danmu2ass)做弹幕格式转换，双击Danmu2Ass.sln，用Visual Studio打开并编译，在项目Danmu2Ass目录下会生成bin文件夹，进入其中的Debug文件夹，可以看到一个Kaedei.Danmu2Ass.exe可执行文件，将视频和弹幕文件一块拖动到该可执行文件图标上去即可生成ASS字幕文件，再通过[potplayer](https://potplayer.daum.net/)打开视频即可自动加载字幕
 
