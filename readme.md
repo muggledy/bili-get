@@ -1,6 +1,6 @@
 # Bilibili视频下载器
 
-<a alt="null">![](https://img.shields.io/badge/python-3.6+-green)&nbsp;<a href="https://pypi.org/project/sole-bili-get/" alt="null"><img src="https://img.shields.io/github/v/release/muggledy/bili-get"/></a></a>
+<a alt="null">![](https://img.shields.io/badge/python-3.6+-green)&nbsp;![](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-pink)&nbsp;<a href="https://pypi.org/project/sole-bili-get/" alt="null"><img src="https://img.shields.io/github/v/release/muggledy/bili-get"/></a></a>
 
 ## 下载
 
@@ -69,13 +69,13 @@ Note: this is a multi-episode video, you can download them all at once with --pl
 
   Cookie获取方式如下：
 
-  ![](https://raw.githubusercontent.com/muggledy/bili-get/master/bilibili_cookie.jpg)
+  ![B站cookie获取方式](https://raw.githubusercontent.com/muggledy/bili-get/master/bilibili_cookie.jpg)
 
 - `-q`或`--quality`用于指定要下载的视频质量（清晰度），可选值有`MAX`（最高质量，缺省值）、`MIN`（最低质量）、`MANUAL`（手动选择视频质量）
 
-- `--nomerge`表示是否自动合成下载下来的音视频文件，默认合成，但需要提前下载[ffmpeg](https://ffmpeg.org/download.html)工具（[windows版本](https://www.gyan.dev/ffmpeg/builds/)）并将其路径添加到`PATH`环境变量
+- `--nomerge`表示是否自动合成下载下来的音视频文件，默认合成，但需要提前下载[ffmpeg](https://ffmpeg.org/download.html)工具（如[windows版本](https://www.gyan.dev/ffmpeg/builds/)）并将其路径添加到`PATH`环境变量
 
-- `--force`表示强制重新下载视频，携带该参数会直接删除`bili_tmp/`临时文件，但不会立即删除全部已下载音视频文件，而是覆盖更新
+- `--force`表示强制重新下载视频，如果没有指定`--playlist`参数，则只是重新下载当前剧集，否则会直接删除`bili_tmp/`临时文件，重新下载全部剧集，但不会立即删除全部已下载音视频文件，而是覆盖更新
 
 - `--debug`用于在控制台输出全部debug日志信息，不指定该参数，也会将日志输出到`bili_tmp/log`中以备查阅
 

@@ -43,7 +43,8 @@ class Bilibili:
                     'ffmpeg not exists, can\'t merge video and audio, you can prepare this tool and re-exec the download cmd'
             else:
                 self.__ffmpeg_exist = True
-        if self.force_re_download:
+        if self.force_re_download and self.fetch_playlists: #只有在指定fetch_playlists的情况下，指定force_re_download才会整个删除临时文件，全部强制重新下载，否则只是强制重新下载对应一集
+            self.__force_re_download_p = float('inf')
             if os.path.exists(self.__local_playlists_info_path):
                 self.logger.warning(f'delete old file {self.__local_playlists_info_path} for force_re_download')
                 os.remove(self.__local_playlists_info_path)
@@ -53,6 +54,12 @@ class Bilibili:
             #首先从本地获取视频信息并填充到self.playlists_info，如果视频（含子剧集）未全部下载完成，则
             #针对未下载剧集需要重新从B站服务器获取相应的剧集信息并更新本地数据
             __local_playlists_info = self.get_playlists_info_from_local()
+            if self.force_re_download:
+                __local_playlists_info = self.clear_download_info_for_origin_url(playlists_info=__local_playlists_info)
+                if __local_playlists_info:
+                    self.save_playlists_info_into_local(__local_playlists_info)
+            else:
+                self.__force_re_download_p = 0
             self.__local_already_download_p_list = \
                 [v['p_num'] for k,v in __local_playlists_info.items() if v['download_flag'] == 3]
             if self.__local_already_download_p_list and self.__ffmpeg_exist:
@@ -98,6 +105,8 @@ class Bilibili:
                 playlists_info[i]['video_save_path'] = self.playlists_info[i]['video_save_path']
             if self.playlists_info[i].get('audio_save_path'):
                 playlists_info[i]['audio_save_path'] = self.playlists_info[i]['audio_save_path']
+            if self.playlists_info[i].get('danmu_url'):
+                playlists_info[i]['danmu_url'] = self.playlists_info[i]['danmu_url']
         self.playlists_info.update(playlists_info)
 
     def get_current_downloaded_info(self): #返回：(剧集总数,已下载,未下载,下载失败,已合入,未合入,合入失败)
@@ -126,7 +135,7 @@ class Bilibili:
                 and (origin_url == self.__origin_url):
             return
         self.__origin_url = origin_url
-        bvid = re.findall(r'video/([^/?]+)', self.__origin_url)
+        bvid = re.findall(r'video/([^/\?]+)', self.__origin_url)
         if bvid: #key id
             self.__bvid, self.__local_playlists_info_path = \
                 bvid[0], get_absolute_path(f'./bili_tmp/local_playlists_info_{bvid[0]}.pickle')
@@ -189,7 +198,7 @@ class Bilibili:
                     if self.disable_console_log:
                         print(select_down_quality_info)
                         if self.__local_already_download_p_list:
-                            print(f"Note: {', '.join(['p'+str(_) for _ in self.__local_already_download_p_list])} has already been downloaded in {self.__output_dir}")
+                            print(f"Note: {', '.join(['p'+str(_) for _ in sorted(self.__local_already_download_p_list)])} has already been downloaded in {self.__output_dir}")
                     if not ((not self.fetch_playlists) and (origin_video_info['p_num'] in self.__local_already_download_p_list)):
                         self.get_danmu_urls()
                 else:
@@ -319,7 +328,7 @@ class Bilibili:
                                        for i,q in enumerate(available_qualities)], key=lambda x:x[1])[0][0]
             best_quality = available_qualities[best_quality_idx]
             get_video_url_already_succeed = 0
-            if self.danmu_urls.get(p):
+            if self.danmu_urls.get(p): #弹幕文件只是附带下载，不保证下载成功
                 if self.download_danmu_xml(self.danmu_urls[p], save_path=os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}.xml"))):
                     danmu_ok_prompt = f"p{p} danmu xml file is downloaded into "+os.path.normpath(os.path.join(os.path.join(self.__output_dir, f"{info['title']}.xml")))
                     self.logger.info(danmu_ok_prompt+f" from {self.danmu_urls[p]}")
@@ -339,8 +348,8 @@ class Bilibili:
                     self.__crawler.url = url
                     self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, 
                         f"{info['title']}{'' if (0 == get_video_url_already_succeed) else '_'+str(get_video_url_already_succeed)}.mp4"))
-                    if self.force_re_download and os.path.exists(self.__crawler.save_path):
-                        self.logger.warning(f'delete old p{p} video file {self.__crawler.save_path} for force_re_download')
+                    if ((self.__force_re_download_p == float('inf')) or (self.__force_re_download_p == p)) and os.path.exists(self.__crawler.save_path):
+                        self.logger.warning(f'delete old p{p} video file {self.__crawler.save_path} and re-download it')
                         os.remove(self.__crawler.save_path)
                     start_time = time.time()
                     ok = self.__crawler.get()
@@ -367,8 +376,8 @@ class Bilibili:
             self.__crawler.url = info['audio_url']
             self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}_audio.mp3")) #audio may also be *.mp4 file 
                                                         #which is the same with video filename in this case, we rename it to *.mp3
-            if self.force_re_download and os.path.exists(self.__crawler.save_path):
-                self.logger.warning(f'delete old p{p} audio file {self.__crawler.save_path} for force_re_download')
+            if ((self.__force_re_download_p == float('inf')) or (self.__force_re_download_p == p)) and os.path.exists(self.__crawler.save_path):
+                self.logger.warning(f'delete old p{p} audio file {self.__crawler.save_path} and re-download it')
                 os.remove(self.__crawler.save_path)
             start_time = time.time()
             ok = self.__crawler.get()
@@ -482,9 +491,9 @@ class Bilibili:
         else:
             return f'https://www.bilibili.com/video/{bvid}/?p={p}'
 
-    def save_playlists_info_into_local(self):
+    def save_playlists_info_into_local(self, playlists_info=None):
         with open(self.__local_playlists_info_path, 'wb') as f:
-            pickle.dump(self.playlists_info, f, pickle.HIGHEST_PROTOCOL)
+            pickle.dump(self.playlists_info if playlists_info is None else playlists_info, f, pickle.HIGHEST_PROTOCOL)
         self.logger.info(f'write playlists info into {self.__local_playlists_info_path}')
 
     def get_playlists_info_from_local(self):
@@ -538,6 +547,26 @@ class Bilibili:
         illegal_chars = r'\/:*?"<>|'
         filename = ''.join(char for char in filename if char not in illegal_chars)
         return filename
+
+    def clear_download_info_for_origin_url(self, playlists_info=None):
+        p = re.findall(r'video/[^/\?]+/\?p=(\d+)', self.origin_url)
+        p = int(p[0]) if p else 1
+        self.__force_re_download_p = p
+        if (not self.playlists_info) and (playlists_info is None):
+            return None
+        flag = True if playlists_info is None else False
+        playlists_info = self.playlists_info if playlists_info is None else playlists_info
+        if p in playlists_info.keys():
+            playlists_info[p]['download_flag'] = 0
+            playlists_info[p]['merge_flag'] = False
+            playlists_info[p]['video_save_path'] = ''
+            playlists_info[p]['audio_save_path'] = ''
+            playlists_info[p]['danmu_url'] = ''
+            self.logger.info(f'delete p{p} download info of original url {self.origin_url} for force_re_download')
+        if flag:
+            self.playlists_info = playlists_info
+            return self.playlists_info
+        return playlists_info
 
     @property
     def disable_console_log(self):
