@@ -1,7 +1,9 @@
-import setuptools, platform
+import setuptools
 from sole_bili_get import __version__, __name__
 
 '''
+python setup.py develop
+python setup.py develop --uninstall
 https://blog.csdn.net/weixin_44015805/article/details/101076449
 https://cloud.tencent.com/developer/article/2114297
 python -m pip install --user --upgrade setuptools wheel
@@ -15,19 +17,6 @@ bili-get --help
 with open("readme.md", "r", encoding="utf-8") as f:
     long_description = f.read()
 
-install_requires_common = [
-    'requests',
-]
-install_requires_windows = install_requires_common + [
-    'pycryptodome', 'pypiwin32',
-]
-install_requires_linux = install_requires_common + []
-
-if platform.system() == 'Windows':
-    install_requires = install_requires_windows
-else:
-    install_requires = install_requires_linux
-
 setuptools.setup(
     name=__name__,
     version=__version__,
@@ -40,14 +29,18 @@ setuptools.setup(
     license="MIT",
     packages=setuptools.find_packages(),
     python_requires=">=3.6",
-    install_requires=install_requires,
+    install_requires=[
+        'requests', 'colorama',
+        'pycryptodome; platform_system == "Windows"',
+        'pypiwin32; platform_system == "Windows"',
+    ],
     classifiers=[
         "License :: OSI Approved :: MIT License",
         'Operating System :: Microsoft :: Windows',
         'Operating System :: POSIX',
     ],
     exclude_package_data={
-        'bili_get': ['__pycache__', 'log'],
+        'bili_get': ['__pycache__', ],
     },
     entry_points={
         'console_scripts': [

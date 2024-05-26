@@ -2,7 +2,7 @@ from .utils import *
 import requests, logging, \
     re, json, pickle, os, \
     subprocess, platform, sys, \
-    time, argparse
+    time, argparse, colorama
 from logging.handlers import RotatingFileHandler
 #from lxml import etree
 from pathlib import Path
@@ -12,6 +12,8 @@ if platform.system() == 'Windows':
     from .chrome_cookie import get_bilibili_cookie
 
 __all__ = ['Bilibili', 'main']
+
+colorama.init(autoreset=True)
 
 class Bilibili:
     def __init__(self, origin_url, **kwargs):
@@ -181,14 +183,16 @@ class Bilibili:
                     self.logger.info(f'html analyse succeed: {str(origin_video_info)}')
                 quality_dict = {_1:_2['quality'] for _1, _2 in origin_video_info['video_info'].items()}
                 _desc = re.sub('\n',' ',origin_video_info['desc'])
-                video_main_info = f"{'(title):':>15}"\
-                    f"{origin_video_info['title']}\n{'(desc):':>15}{_desc}\n"\
-                    f"{'(author):':>15}{origin_video_info['author']['name']}\n"\
-                    f"{'(episodes num):':>15}{origin_video_info['videos']}"\
-                    f"\n{'(quality):':>15}{', '.join([_[1]+'(id:'+str(_[0])+')' for _ in quality_dict.items()])}"
+                video_main_info = \
+                    colored_text(f"{'(title):':>15}{origin_video_info['title']}", 'red', highlight=1) + '\n' +\
+                    colored_text(f"{'(desc):':>15}{_desc}", 'red', highlight=1) + '\n' +\
+                    colored_text(f"{'(author):':>15}{origin_video_info['author']['name']}", 'red', highlight=1) + '\n' +\
+                    colored_text(f"{'(episodes num):':>15}{origin_video_info['videos']}", 'red', highlight=1) + '\n' +\
+                    colored_text(f"{'(quality):':>15}{', '.join([_[1]+'(id:'+str(_[0])+')' for _ in quality_dict.items()])}", 'red', highlight=1)
                 self.logger.info(f"origin html({origin_video_info['url']}) analyse succeed\n{video_main_info}")
                 if self.disable_console_log:
-                    print(f"{'(origin url):':>15}{self.origin_url}\n{video_main_info}")
+                    print(colored_text(f"{'(origin url):':>15}{self.origin_url}", 'red', highlight=1) + '\n' +\
+                          f"{video_main_info}")
                 if not ((origin_video_info['videos'] == len(self.__local_already_download_p_list)) and 
                         list(sorted(self.__local_already_download_p_list)) == list(range(1, origin_video_info['videos']+1))):
                     if self.quality == 'MANUAL':
@@ -338,23 +342,25 @@ class Bilibili:
             get_video_url_already_succeed = 0
             if self.danmu_urls.get(p): #弹幕文件只是附带下载，不保证下载成功
                 if self.download_danmu_xml(self.danmu_urls[p], save_path=os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}.xml"))):
-                    danmu_ok_prompt = f"p{p} danmu xml file is downloaded into "+os.path.normpath(os.path.join(os.path.join(self.__output_dir, f"{info['title']}.xml")))
+                    danmu_ok_prompt = f"p{p} danmu xml"\
+                        f" is downloaded into "+os.path.normpath(os.path.join(os.path.join(self.__output_dir, f"{info['title']}.xml")))
                     self.logger.info(danmu_ok_prompt+f" from {self.danmu_urls[p]}")
-                    if self.disable_console_log: print(danmu_ok_prompt)
+                    if self.disable_console_log: print(colored_text(danmu_ok_prompt, 'white'))
                     self.playlists_info[p]['danmu_url'] = self.danmu_urls[p]
             self.__crawler.url = self.playlists_info[p]['cover']
             self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}"))
             if self.__crawler.get(): #视频封面只是附带下载，不保证下载成功
                 self.logger.info(f'p{p} cover is downloaded into {self.__crawler.save_path}')
                 if self.disable_console_log:
-                    print(f'p{p} cover is downloaded into {self.__crawler.save_path}')
+                    print(colored_text(f'p{p} cover is downloaded into {self.__crawler.save_path}', 'white'))
             if self.playlists_info[p]['download_flag'] != 1:
                 for url,codec_info in sorted(info['video_info'][best_quality]['urls'], 
                                              key=lambda x:get_idx_of_specific_codedc(x[1])):
                     #if not [_c for _c in download_specific_codec_video if codec_info.lower().startswith(_c.lower())]:
                     #    continue
-                    downloading_video_info = f"start to download p{p}(video:{info['video_info'][best_quality]['quality']},"\
-                        f"{'x'.join([str(_) for _ in info['video_info'][best_quality]['size']])},{codec_info})"\
+                    downloading_video_info = "start to download "+\
+                        colored_text(f"p{p}(video:{info['video_info'][best_quality]['quality']},"\
+                        f"{'x'.join([str(_) for _ in info['video_info'][best_quality]['size']])},{codec_info})", 'red')+\
                         f"{' from '+info['url'] if self.disable_console_log else ''}..."
                     self.logger.info(downloading_video_info)
                     if self.disable_console_log:
@@ -386,7 +392,7 @@ class Bilibili:
                 continue
             self.logger.info(f"start to download p{p}(audio)...")
             if self.disable_console_log:
-                print(f"start to download p{p}(audio)...")
+                print("start to download " + colored_text(f"p{p}(audio)", 'blue') + "...")
             self.__crawler.url = info['audio_url']
             self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}_audio.mp3")) #audio may also be *.mp4 file 
                                                         #which is the same with video filename in this case, we rename it to *.mp3
@@ -449,11 +455,11 @@ class Bilibili:
                     os.remove(audio_file)
                     os.rename(merge_file, video_file)
                     if self.disable_console_log:
-                        print(f"ffmpeg merge success, save into {video_file}")
+                        print(colored_text(f"ffmpeg merge success, save into {video_file}", 'green'))
                 else:
                     self.logger.info(f'success! runtime: {time.time()-start_time:.2f}s, the merged file is at {merge_file}')
                     if self.disable_console_log:
-                        print(f"ffmpeg merge success, save into {merge_file}")
+                        print(colored_text(f"ffmpeg merge success, save into {merge_file}", 'green'))
                 sys.stdout.flush()
                 return True
             self.logger.error('merge failed for unknown reason!')

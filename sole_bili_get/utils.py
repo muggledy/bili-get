@@ -1,7 +1,7 @@
 import os, re, requests, hashlib, pickle, platform
 from contextlib import closing
 
-__all__ = ["get_absolute_path", "find_json_dict_from_text", "Crawler", "parse_cookies"]
+__all__ = ["get_absolute_path", "find_json_dict_from_text", "Crawler", "parse_cookies", "colored_text"]
 
 _utils_debug = False
 _base_dir = os.path.dirname(__file__)
@@ -222,6 +222,21 @@ def parse_cookies(cookies_str):
             key, value = cookie.split('=', 1)
             cookies_dict[key] = value
     return cookies_dict
+
+fore_color = {
+    'black': 30, 'red':31, 'green':32, 'yellow':33, 'blue':34, 'purplered':35, 'cyan':36, 'white':37
+}
+back_color = {
+    'black': 40, 'red':41, 'green':42, 'yellow':43, 'blue':44, 'purplered':45, 'cyan':46, 'white':47
+}
+
+def colored_text(text, fore='green', back='black', highlight=0):
+    fore = str(fore_color.get(fore.lower(), fore_color['white']))
+    back = str(back_color.get(back.lower(), back_color['black']))
+    if highlight not in [0, 1, 4, 5, 7, 8]:
+        highlight = 0
+    highlight = str(highlight)
+    return '\033[' + highlight + ';' + fore + ';' + back + 'm' + text + '\033[0m'
 
 if __name__ == '__main__':
     #测试断点续传功能
