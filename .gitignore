@@ -10,3 +10,4 @@
 !/sole_bili_get/bili_get.py
 !/sole_bili_get/utils.py
 !/sole_bili_get/chrome_cookie.py
+!/sole_bili_get/file_lock.py

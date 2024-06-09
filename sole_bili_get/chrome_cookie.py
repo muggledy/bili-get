@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 import win32crypt  # pip install pypiwin32
 from Crypto.Cipher import AES  # pip install pycryptodome
-from .utils import get_absolute_path
+from .utils import get_absolute_path, is_time_in_oneday
 from . import utils
 
 '''
@@ -97,12 +97,6 @@ def get_db_path_info(select=None):
             return path
     if utils._utils_debug: print(f"Database path not found({db_path})")
     return None
-
-def is_time_in_oneday(timestamp, interval): #interval in [1,24]
-    t1 = datetime.fromtimestamp(timestamp)
-    t2 = datetime.now()
-    return (t1.date() == t2.date() and 
-            abs(t2 - t1) <= timedelta(hours=interval))
 
 def get_cookies(db_select=None, domain_select=None, domain=None):
     cookies_data = []

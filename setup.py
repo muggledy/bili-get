@@ -30,7 +30,7 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     python_requires=">=3.6",
     install_requires=[
-        'requests', 'colorama',
+        'requests', 'colorama', 'psutil',
         'pycryptodome; platform_system == "Windows"',
         'pypiwin32; platform_system == "Windows"',
     ],

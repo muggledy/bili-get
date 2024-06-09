@@ -1,7 +1,10 @@
 import os, re, requests, hashlib, pickle, platform
 from contextlib import closing
+from datetime import datetime, timedelta
 
-__all__ = ["get_absolute_path", "find_json_dict_from_text", "Crawler", "parse_cookies", "colored_text"]
+__all__ = ["get_absolute_path", "find_json_dict_from_text", "Crawler", 
+           "parse_cookies", "colored_text", "timestamp2str", "is_time_in_oneday", 
+           "passed_time_exceeds_specified_hours"]
 
 _utils_debug = False
 _base_dir = os.path.dirname(__file__)
@@ -237,6 +240,28 @@ def colored_text(text, fore='green', back='black', highlight=0):
         highlight = 0
     highlight = str(highlight)
     return '\033[' + highlight + ';' + fore + ';' + back + 'm' + text + '\033[0m'
+
+def timestamp2str(timestamp):
+    dt_object = datetime.fromtimestamp(timestamp)
+    dt_string = dt_object.strftime('%Y-%m-%d %H:%M:%S.%f')
+    return dt_string
+
+def is_time_in_oneday(timestamp, interval, strict_check_day=True): #interval in [1,24]
+    if interval not in range(1, 25):
+        print(f'Warn(is_time_in_oneday): change param interval from {interval} to 24')
+        interval = 24
+    t1 = datetime.fromtimestamp(timestamp)
+    t2 = datetime.now()
+    if strict_check_day:
+        return (t1.date() == t2.date() and 
+            abs(t2 - t1) <= timedelta(hours=interval))
+    else:
+        return abs(t2 - t1) <= timedelta(hours=interval)
+
+def passed_time_exceeds_specified_hours(timestamp, interval):
+    t1 = datetime.fromtimestamp(timestamp)
+    t2 = datetime.now()
+    return abs(t2 - t1) > timedelta(hours=interval)
 
 if __name__ == '__main__':
     #测试断点续传功能

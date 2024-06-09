@@ -2,12 +2,14 @@ from .utils import *
 import requests, logging, \
     re, json, pickle, os, \
     subprocess, platform, sys, \
-    time, argparse, colorama
+    time, argparse, colorama, psutil
 from logging.handlers import RotatingFileHandler
 #from lxml import etree
 from pathlib import Path
 from copy import deepcopy
 from . import utils
+from .file_lock import LockedFile
+from datetime import datetime
 if platform.system() == 'Windows':
     from .chrome_cookie import get_bilibili_cookie
 
@@ -55,6 +57,9 @@ class Bilibili:
             __local_playlists_info = {}
             self.__local_already_download_p_list = []
         else:
+            if not self.force_re_download: #多进程协作下载仅针对不带--force参数的情况，否则行为无法预测，特此声明！
+                if not self.initialize_local_download_progress_info():
+                    return
             #首先从本地获取视频信息并填充到self.playlists_info，如果视频（含子剧集）未全部下载完成，则
             #针对未下载剧集需要重新从B站服务器获取相应的剧集信息并更新本地数据
             __local_playlists_info = self.get_playlists_info_from_local()
@@ -64,10 +69,11 @@ class Bilibili:
                     self.save_playlists_info_into_local(__local_playlists_info)
             else:
                 self.__force_re_download_p = 0
-            self.__local_already_download_p_list = \
-                [v['p_num'] for k,v in __local_playlists_info.items() if v['download_flag'] == 3]
+            self.update_local_already_download_p_list(playlists_info=__local_playlists_info)
             if self.__local_already_download_p_list and self.__ffmpeg_exist:
-                not_merged_p_list = [i for i in self.__local_already_download_p_list if not __local_playlists_info[i]['merge_flag']]
+                not_merged_p_list = [i for i in self.__local_already_download_p_list if \
+                                     (not __local_playlists_info[i]['merge_flag'] and \
+                                     ((__local_playlists_info[i].get('process') is not None) and (__local_playlists_info[i]['process'][0] == os.getpid())))]
                 if not_merged_p_list:
                     self.logger.info('first, merge previously downloaded videos/audios...')
                     if self.disable_console_log:
@@ -87,7 +93,7 @@ class Bilibili:
                          f"merged:{merged}, not_merge:{not_merge}, merge_failed:{merge_failed}")
         if self.__all_downloed_flag:
             if total == downloaded:
-                all_download_ok_prompt = f'{"(all)videos have" if total>1 else "This video has"} already been downloaded in {self.__output_dir}!'
+                all_download_ok_prompt = f'{"(all)videos locked by current bili_get process have" if total>1 else "This video has"} already been downloaded in {self.__output_dir}!'
                 self.logger.info(all_download_ok_prompt)
                 if self.disable_console_log:
                     print(all_download_ok_prompt)
@@ -118,18 +124,19 @@ class Bilibili:
                 playlists_info[i]['danmu_url'] = self.playlists_info[i]['danmu_url']
         self.playlists_info.update(playlists_info)
 
-    def get_current_downloaded_info(self): #返回：(剧集总数,已下载,未下载,下载失败,已合入,未合入,合入失败)
+    def get_current_downloaded_info(self): #返回：(剧集总数,已下载,未下载,下载失败,已合入,未合入,合入失败)，这个统计信息比较粗略，无法区分是真的下载失败了还是正在被其他进程下载，鸡肋，也懒得改了
         if not self.playlists_info:
             return (0,0,0,0,0,0,0)
         current_info = sorted([(p_num, info['download_flag'], info['merge_flag']) for p_num, info in self.playlists_info.items()], key=lambda x:x[0])
         total = self.playlists_info[current_info[0][0]]['videos']
         downloaded = len([info for info in current_info if info[1] == 3])
-        not_download = total - len(current_info)
-        download_failed = len(current_info) - downloaded
+        not_download = len([info for info in current_info if len(self.playlists_info[info[0]]) == 3]) #如果info形如
+                            #{'download_flag':0, 'merge_flag':False, 'process':None}，说明还未被任何bili_get进程下载
+        download_failed = total - downloaded - not_download
         if self.__ffmpeg_exist:
             merged = len([info for info in current_info if info[2]])
             not_merge = not_download
-            merge_failed = len(current_info) - merged
+            merge_failed = total - merged - not_merge
         else:
             merged, not_merge, merge_failed = 0, total, 0
         return (total, downloaded, not_download, download_failed, merged, not_merge, merge_failed)
@@ -160,7 +167,6 @@ class Bilibili:
         '''解析原始请求url并获取全部剧集的视频信息（若fetch_playlists为True且是多剧集视频的话，注意可能不全，
            即部分子剧集视频信息获取失败），返回self.playlists_info'''
         try:
-            new_add_info_num = 0
             start_time = time.time()
             req = requests.get(self.origin_url, headers=self.headers, cookies=self.cookies)
             if req.ok:
@@ -174,11 +180,28 @@ class Bilibili:
                     if self.disable_console_log:
                         print(f'Error: analyse origin {self.origin_url} html page failed')
                     return None
-                if origin_video_info['p_num'] not in self.__local_already_download_p_list:
+                origin_video_is_downloaded_by_self = False
+                if origin_video_info['p_num'] in self.playlists_info:
+                    origin_video_info['process'] = self.playlists_info[origin_video_info['p_num']].get('process')
+                #如果原始url视频尚未被下载，且其未被任何其他bili_get进程处理（即已处于正在下载状态的话）：则本进程下载之
+                if (origin_video_info['p_num'] not in self.__local_already_download_p_list) and \
+                        (self.test_playlist_is_handled_by_self(origin_video_info.get('process'), \
+                            f"(get_origin_url_and_analyse)p{origin_video_info['p_num']}(test if video(origin url) is locked by self bili_get process that judge true)") or \
+                        (not self.test_playlist_is_handled_by_one_process(origin_video_info.get('process'), \
+                            f"(get_origin_url_and_analyse)p{origin_video_info['p_num']}(test if video(origin url) is currently downloaded by other bili_get process that judge false)"))):
+                    origin_video_is_downloaded_by_self = True
+                    self.logger.info(f"current bili_get process({os.getpid()}) will download origin video(p{origin_video_info['p_num']})")
                     origin_video_info['download_flag'] = 0
                     origin_video_info['merge_flag'] = False
+                    origin_video_info['process'] = (os.getpid(), datetime.now().timestamp())
                     self.update_newest_playlists_info({origin_video_info['p_num']:origin_video_info})
-                    new_add_info_num += 1
+                    self.save_playlists_info_into_local() #首个bili_get进程执行到此之前，其他bili_get进程尚无法执行，因为处于“STATE_BLOCK”状态，此行执行后，“STATE_BLOCK”状态取消，
+                                                          #其他进程可以开始协作下载
+                if len(self.playlists_info) != origin_video_info['videos']: #针对UP主新增剧集，本地需要新增对应的占位符供各个bili_get进程锁定下载
+                    new_upload_p_list = [_ for _ in range(1, origin_video_info['videos']+1) if _ not in self.playlists_info]
+                    self.logger.info(f"UP {origin_video_info['author']['name']} upload {origin_video_info['videos'] - len(self.playlists_info)} "
+                                     f"new episodes({','.join(['p'+str(_) for _ in new_upload_p_list])}) for download")
+                    self.save_playlists_info_into_local(dict(zip(new_upload_p_list, [None]*len(new_upload_p_list))))
                 if self.debug_all:
                     self.logger.info(f'html analyse succeed: {str(origin_video_info)}')
                 quality_dict = {_1:_2['quality'] for _1, _2 in origin_video_info['video_info'].items()}
@@ -193,8 +216,11 @@ class Bilibili:
                 if self.disable_console_log:
                     print(colored_text(f"{'(origin url):':>15}{self.origin_url}", 'red', highlight=1) + '\n' +\
                           f"{video_main_info}")
-                if not ((origin_video_info['videos'] == len(self.__local_already_download_p_list)) and 
-                        list(sorted(self.__local_already_download_p_list)) == list(range(1, origin_video_info['videos']+1))):
+                self.update_playlists_info_from_local() #之前如果已经锁定了一个待下载剧集，此处不会再锁定其他的，此处只是为了从本地更新最新self.playlists_info
+                now_downloaded_by_other_progress_p_num = self.get_currently_downloaded_by_other_progress_playlist_p_num()
+                if not ((origin_video_info['videos'] == (len(self.__local_already_download_p_list) + len(now_downloaded_by_other_progress_p_num))) and 
+                        list(sorted(self.__local_already_download_p_list + now_downloaded_by_other_progress_p_num)) \
+                        == list(range(1, origin_video_info['videos']+1))): #判断是否还有要下载的剧集，否则直接结束进程
                     if self.quality == 'MANUAL':
                         while 1:
                             manual_quality_id = int(input('please select quality(id): '))
@@ -211,19 +237,30 @@ class Bilibili:
                         print(select_down_quality_info)
                         if self.__local_already_download_p_list:
                             print(f"Note: {', '.join(['p'+str(_) for _ in sorted(self.__local_already_download_p_list)])} has already been downloaded in {self.__output_dir}")
-                    if not ((not self.fetch_playlists) and (origin_video_info['p_num'] in self.__local_already_download_p_list)):
+                    if not ((not self.fetch_playlists) and (origin_video_info['p_num'] in \
+                                (self.__local_already_download_p_list + now_downloaded_by_other_progress_p_num))): #如果仅下载原始剧集且其已被下载或正在被其他进程下载，则不需要预获取所有剧集的弹幕资源
                         self.get_danmu_urls()
                 else:
-                    self.logger.info(f'(all) videos has already been downloaded in {self.__output_dir}! '
+                    if now_downloaded_by_other_progress_p_num:
+                        self.logger.info(f'{len(self.__local_already_download_p_list)} videos has been downloaded in {self.__output_dir}, '
+                                         f'{len(now_downloaded_by_other_progress_p_num)} is currently downloaded by other bili_get progress')
+                    else:
+                        self.logger.info(f'(all) videos has already been downloaded in {self.__output_dir}! '
                                      f'if you want to re-download, please delete {self.__local_playlists_info_path} or pass force_re_download param')
                     self.__all_downloed_flag = True
                     return self.playlists_info
                 if self.__download_at_once:
                     self.__all_downloed_flag = True
-                    self.download_by_playlists_info(which_p=origin_video_info['p_num'])
-                if self.fetch_playlists and (origin_video_info['videos'] > 1):
+                    if origin_video_is_downloaded_by_self:
+                        self.download_by_playlists_info(which_p=origin_video_info['p_num'])
+                if self.fetch_playlists and (origin_video_info['videos'] > 1): #遍历剧集号，只有那些被当前进程锁定的未下载剧集才会被当前进程执行下载，否则直接跳过
                     for p in range(1, origin_video_info['videos']+1):
+                        self.update_playlists_info_from_local() #每次只选取并锁定一个剧集，下载完，需要重新选取并锁定另一个剧集下载
+                        self.update_local_already_download_p_list()
                         if (p == origin_video_info['p_num']) or (p in self.__local_already_download_p_list):
+                            continue
+                        if p not in [_p for _p,_v in self.playlists_info.items() if ((_v.get('process') is not None) and (_v['process'][0]==os.getpid())) \
+                                and ((_v.get('download_flag') is None) or ((_v.get('download_flag') is not None) and (_v['download_flag']!=3)))]:
                             continue
                         try:
                             sub_url = self.generate_bilibili_video_url(origin_video_info['bvid'], p)
@@ -233,8 +270,9 @@ class Bilibili:
                             if sub_video_info is not None:
                                 sub_video_info['download_flag'] = 0
                                 sub_video_info['merge_flag'] = False
+                                if sub_video_info['p_num'] in self.playlists_info:
+                                    sub_video_info['process'] = self.playlists_info[sub_video_info['p_num']].get('process')
                                 self.update_newest_playlists_info({sub_video_info['p_num']:sub_video_info})
-                                new_add_info_num += 1
                                 if self.__download_at_once:
                                     self.download_by_playlists_info(which_p=sub_video_info['p_num'])
                             else:
@@ -243,14 +281,25 @@ class Bilibili:
                         except Exception as e:
                             self.logger.error(f'exception([{e.__traceback__.tb_frame.f_globals["__file__"]}:'
                                               f'{e.__traceback__.tb_lineno}] {e}) occurs when getting from {sub_url}')
-                    if new_add_info_num + len(self.__local_already_download_p_list) == origin_video_info['videos']:
-                        self.logger.info(f"all playlists html analyse succeed(p1~p{origin_video_info['videos']})" + 
-                            (f", in which {','.join(['p'+str(i) for i in self.__local_already_download_p_list])} info "
-                             f"(already downloaded) get from local)! runtime: {time.time()-start_time:.2f}s" 
-                            if self.__local_already_download_p_list else f', runtime: {time.time()-start_time:.2f}s'))
-                    else:
-                        self.logger.warning(f"{origin_video_info['videos'] - (new_add_info_num + len(self.__local_already_download_p_list))} "
-                                         "sub videos info fetch failed!")
+                    self.update_playlists_info_from_local()
+                    self.update_local_already_download_p_list() #self.__local_already_download_p_list是当前已完成下载剧集
+                    not_downloaded_p_list = [_ for _ in range(1, origin_video_info['videos']+1) if _ not in self.__local_already_download_p_list] #未完成下载剧集
+                    not_downloaded_and_failed_p_list = \
+                        [_ for _ in not_downloaded_p_list if ((not self.test_playlist_is_handled_by_one_process(self.playlists_info[_].get('process'), \
+                                                                                                                f'p{_}(for prompt show, ignored)')) or \
+                        self.test_playlist_is_handled_by_self(self.playlists_info[_].get('process'), f'p{_}(for prompt show, ignored)'))] #未完成下载剧集中已下载失败的剧集
+                    not_downloaded_and_is_downloading_p_list = list(set(not_downloaded_p_list) - set(not_downloaded_and_failed_p_list)) #未完成下载剧集中还正在下载的剧集
+                    download_result_prompt = (f"total {origin_video_info['videos']} episodes, "
+                            f"in which {len(self.__local_already_download_p_list)} {'are' if len(self.__local_already_download_p_list)>1 else 'is'} downloaded" + \
+                            ((f", {','.join(['p'+str(_) for _ in not_downloaded_and_is_downloading_p_list])} {'are' if len(not_downloaded_and_is_downloading_p_list)>1 else 'is'} "
+                            f"currently downloaded by other bili_get {'processes' if len(not_downloaded_and_is_downloading_p_list)>1 else 'process'}") \
+                                if not_downloaded_and_is_downloading_p_list else "") + \
+                            (f", {','.join(['p'+str(_) for _ in not_downloaded_and_failed_p_list])} {'are' if len(not_downloaded_p_list)>1 else 'is'} failed to download" \
+                                if not_downloaded_p_list else "") + \
+                            f", runtime: {time.time()-start_time:.2f}s")
+                    self.logger.info(download_result_prompt)
+                    if self.disable_console_log:
+                        print(download_result_prompt)
                 elif (origin_video_info['videos'] > 1) and (not self.fetch_playlists) \
                         and (len(self.__local_already_download_p_list) < origin_video_info['videos']):
                     print('Note: this is a multi-episode video, you can download them all at once with --playlist')
@@ -332,6 +381,11 @@ class Bilibili:
         for p in sorted(self.playlists_info.keys()):
             if (which_p is not None) and (p != which_p):
                 continue
+            #每个剧集只能被指定的处理进程下载，bili_get进程下载前都会选取一个待下载剧集并锁定它，避免多进程重复下载同一剧集
+            if (not self.force_re_download) and (not self.test_playlist_is_handled_by_self(self.playlists_info[p].get('process'), \
+                    f'(download_by_playlists_info)p{p}(test if it is locked(judge true) by my self bili_get process)')):
+                self.logger.error(f"can\'t download p{p} for owner handle pid({self.playlists_info[p].get('process')}) is not current bili_get progress({os.getpid()})")
+                continue
             if self.playlists_info[p]['download_flag'] == 3:
                 continue
             info = self.playlists_info[p]
@@ -390,9 +444,10 @@ class Bilibili:
                 self.logger.info(f"p{p} video has been downloaded in {self.__output_dir}")
             if self.playlists_info[p]['download_flag'] == 0:
                 continue
-            self.logger.info(f"start to download p{p}(audio)...")
+            downloading_audio_info = "start to download " + colored_text(f"p{p}(audio)", 'blue') + "..."
+            self.logger.info(downloading_audio_info)
             if self.disable_console_log:
-                print("start to download " + colored_text(f"p{p}(audio)", 'blue') + "...")
+                print(downloading_audio_info)
             self.__crawler.url = info['audio_url']
             self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}_audio.mp3")) #audio may also be *.mp4 file 
                                                         #which is the same with video filename in this case, we rename it to *.mp3
@@ -450,14 +505,14 @@ class Bilibili:
                 result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if (result.returncode == 0) and os.path.exists(merge_file):
                 if self.remove_merge_materials:
-                    self.logger.info(f'success! runtime: {time.time()-start_time:.2f}s, delete merge materials, rename {merge_file} => {video_file}')
+                    self.logger.info(colored_text(f'success! runtime: {time.time()-start_time:.2f}s, delete merge materials, rename {merge_file} => {video_file}', 'green'))
                     os.remove(video_file)
                     os.remove(audio_file)
                     os.rename(merge_file, video_file)
                     if self.disable_console_log:
                         print(colored_text(f"ffmpeg merge success, save into {video_file}", 'green'))
                 else:
-                    self.logger.info(f'success! runtime: {time.time()-start_time:.2f}s, the merged file is at {merge_file}')
+                    self.logger.info(colored_text(f'success! runtime: {time.time()-start_time:.2f}s, the merged file is at {merge_file}', 'green'))
                     if self.disable_console_log:
                         print(colored_text(f"ffmpeg merge success, save into {merge_file}", 'green'))
                 sys.stdout.flush()
@@ -483,10 +538,14 @@ class Bilibili:
             playlists_info = self.playlists_info
             flag = True
         n0 = len(playlists_info.keys()) #全部剧集总数
-        n1, n2, n3, n4 = 0, 0, 0, 0
+        n1, n2, n3, n4, n5 = 0, 0, 0, 0, 0
         for p in sorted(playlists_info.keys()):
             if playlists_info[p]['download_flag'] == 3:
                 if not playlists_info[p]['merge_flag']:
+                    if not self.test_playlist_is_handled_by_self(playlists_info[p].get('process'), \
+                            f'(check_playlists_is_merged)p{p}(test if it is not locked(judge false) by self bili_get process)'):
+                        n5 += 1 #不需要被本进程合成的数量
+                        continue
                     if not self.merge_video_and_audio(playlists_info[p]['video_save_path'], playlists_info[p]['audio_save_path']):
                         n2 += 1 #此处最新合成失败的数量
                     else:
@@ -501,7 +560,8 @@ class Bilibili:
                 n3 += 1 #视频尚未下载成功的数量
         if flag:
             if (n1 == n0) or ((n1+n4) == n0): self.logger.info(f'all {n0} mv are merged!')
-            else: self.logger.info(f'{n0-(n1+n4)} mv not merge, in which {n3} mv not downloaded, {n2} mv (ffmpeg)merge failed!')
+            else: self.logger.info(f'{n0-(n1+n4)} mv not merge, in which {n3} mv not downloaded. '
+                                   f'for those({n0-n3}) already downloaded, {n5} mv no need to be processed by current pid({os.getpid()}), {n2} mv (ffmpeg)merge failed!')
         return (playlists_info if not flag else None) #只有在传入非None的playlists_info时，才返回更新后的它，否则返回None
 
     @staticmethod
@@ -511,19 +571,182 @@ class Bilibili:
         else:
             return f'https://www.bilibili.com/video/{bvid}/?p={p}'
 
+    def initialize_local_download_progress_info(self): #返回True表示后续流程可以继续，否则直接退出进程
+        with LockedFile(self.__local_playlists_info_path, 'r+b' if os.path.exists(self.__local_playlists_info_path) else 'w+b') as f:
+            try: #初次读取没有数据会出现“io.UnsupportedOperation: read”错误，需捕捉
+                data = pickle.load(f)
+                if (type(data) == tuple) and (data[0] == 'STATE_BLOCK') and \
+                        self.test_playlist_is_handled_by_one_process(data[1:], f'(initialize_local_download_progress_info)the playlists(test if STATE_BLOCK is valid)'):
+                    #最开始若两个进程同时开始，为了避免两个进程同时去B站获取视频url
+                    #下载信息并重复写入本地，只允许其中一个bili_get进程启动，另一个直接退出，这种概率很小，因为正常情况下从B站获取剧集下载信息的
+                    #时间也就几秒，一般用户不会在这几秒内又启动一个bili_get进程，一般是一个进程下载了几集发现太慢等不及，才会再起一个进程并行下载
+                    prompt = f'current pid {os.getpid()} can\'t start bili_get for another pid {data[1]} is getting download info from bilibili firstly'
+                    self.logger.error(prompt)
+                    if self.disable_console_log: print(prompt)
+                    return False
+                elif type(data) == dict: #playlists info
+                    return True
+            except:
+                init_info = ('STATE_BLOCK', os.getpid(), datetime.now().timestamp())
+                f.truncate(0)
+                f.seek(0)
+                pickle.dump(init_info, f, pickle.HIGHEST_PROTOCOL)
+                f.flush()
+                self.logger.info(f'pid {init_info[1]} start bili_get firstly at {timestamp2str(init_info[2])}...')
+                return True
+        prompt = f'pid {os.getpid()} can\'t start bili_get for unknown reason'
+        self.logger.error(prompt)
+        if self.disable_console_log: print(prompt)
+        return False
+
     def save_playlists_info_into_local(self, playlists_info=None):
-        with open(self.__local_playlists_info_path, 'wb') as f:
-            pickle.dump(self.playlists_info if playlists_info is None else playlists_info, f, pickle.HIGHEST_PROTOCOL)
+        playlists_info = self.playlists_info if playlists_info is None else playlists_info
+        with LockedFile(self.__local_playlists_info_path, 'r+b') as f:
+            local_playlists_info = pickle.load(f) #保存下载进度到本地时，其他bili_get进程可能已经对下载进度进行了更新，因此此处需要读取最新的下载进度
+            if type(local_playlists_info) == tuple:
+                select_one_to_download = False
+                for i in range(1, playlists_info[list(playlists_info.keys())[0]]['videos']+1): #初次保存，入参是origin_url的剧集信息，只有这一个剧集信息，需要据此扩充全部剧集占位
+                    if playlists_info.get(i) is None:
+                        playlists_info[i] = {'download_flag':0, 'merge_flag':False, 'process':None} #占位，便于其他bili_get进程从该task pool选取
+                    else:
+                        #首次保存视频下载信息，第一个未下载视频（且必然是origin url对应剧集）被立即选取作为当前进程的下载对象
+                        if playlists_info[i]['download_flag'] != 3 and self.test_playlist_is_handled_by_self(playlists_info[i].get('process'), \
+                                f'(save_playlists_info_into_local)p{i}(try to select origin url to handle)'):
+                            select_one_to_download = True
+                        elif (playlists_info[i]['download_flag'] != 3) and (not select_one_to_download) and \
+                                (not self.test_playlist_is_handled_by_one_process(playlists_info[i].get('process'), \
+                                f'(save_playlists_info_into_local)p{i}(try to select origin url to handle)')):
+                            self.logger.info(f'pid {os.getpid()} firstly get info of {self.__bvid}(p{i}) from bilibili and create all tasks pool')
+                            select_one_to_download = True
+                            playlists_info[i]['process'] = (os.getpid(), datetime.now().timestamp())
+            elif type(local_playlists_info) == dict:
+                all_videos_num = 0
+                for p, v in playlists_info.items():
+                    if v.get('videos') is not None:
+                        all_videos_num = max(all_videos_num, v['videos'])
+                    if p not in local_playlists_info.keys(): #UP主新增剧集占位信息保存到本地
+                        local_playlists_info[p] = {'download_flag':0, 'merge_flag':False, 'process':None}
+                    else:
+                        if (v.get('process') is None) or (v['process'][0] != os.getpid()): #只需要更新当前进程正在处理的剧集信息到本地
+                            continue
+                        if self.force_re_download:
+                            local_playlists_info[p] = v
+                        else:
+                            if (local_playlists_info[p]['download_flag'] != 3) or (not local_playlists_info[p]['merge_flag']):
+                                local_playlists_info[p] = v
+                all_videos_num = max(all_videos_num, len(local_playlists_info))
+                if all_videos_num != len(local_playlists_info):
+                    for _ in range(1, all_videos_num+1):
+                        if _ not in local_playlists_info:
+                            local_playlists_info[_] = {'download_flag':0, 'merge_flag':False, 'process':None}
+                for p, v in local_playlists_info.items(): #如果UP主新增剧集，旧的剧集信息中的“剧集总数”字段应当更新
+                    if (v.get('videos') is not None) and (v['videos'] != all_videos_num):
+                        local_playlists_info[p]['videos'] = all_videos_num
+                playlists_info = local_playlists_info
+            f.truncate(0)
+            f.seek(0)
+            pickle.dump(playlists_info, f, pickle.HIGHEST_PROTOCOL)
+            f.flush()
         self.logger.info(f'write playlists info into {self.__local_playlists_info_path}')
 
-    def get_playlists_info_from_local(self):
-        if not os.path.exists(self.__local_playlists_info_path):
-            self.logger.info(f'{self.__local_playlists_info_path} not exists')
-            return {}
-        with open(self.__local_playlists_info_path, 'rb') as f:
+    def get_playlists_info_from_local(self, need_to_lock_merge_task=True): #从本地读取playlists_info下载进度同时锁定一个未下载剧集任务
+        select_one_to_download = False
+        with LockedFile(self.__local_playlists_info_path, 'r+b') as f:
             local_playlists_info = pickle.load(f)
+            if type(local_playlists_info) == tuple:
+                return {} #尚未从B站获取到下载信息，本地的下载进度为空
+            elif type(local_playlists_info) == dict:
+                for p,v in sorted(local_playlists_info.items(), key=lambda x:x[0]):
+                    if ((v['download_flag'] != 3) or (not v['merge_flag'])) and \
+                            (not self.test_playlist_is_handled_by_one_process(v.get('process'), \
+                            f'(get_playlists_info_from_local)p{p}(clear invalid process_info that judge false)')): #清空无效的剧集process_info
+                        local_playlists_info[p]['process'] = None
+                    if (v['download_flag'] != 3) and self.test_playlist_is_handled_by_self(v.get('process'), \
+                            f'(get_playlists_info_from_local)p{p}(select video download task that judge true)'): #已被当前进程选取
+                        select_one_to_download = True
+                    elif (v['download_flag'] != 3) and (not select_one_to_download) \
+                            and (not self.test_playlist_is_handled_by_one_process(v.get('process'), f'(get_playlists_info_from_local)p{p}(select video download task that judge false)')):
+                        local_playlists_info[p]['process'] = (os.getpid(), datetime.now().timestamp()) #选取一个未被任何其他bili_get进程处理的剧集，后续
+                                                                                                       #进程也只会对process是本进程的剧集进行下载处理
+                        self.logger.info(f'pid {os.getpid()} select p{p} to download')
+                        select_one_to_download = True
+                    if need_to_lock_merge_task:
+                        if (v['download_flag'] == 3) and (not v['merge_flag']) and self.test_playlist_is_handled_by_self(v.get('process'), \
+                                f'(get_playlists_info_from_local)p{p}(select ffmpeg merge task that judge rtue)'): #已被当前进程选取
+                            pass
+                        elif (v['download_flag'] == 3) and (not v['merge_flag']) and (not self.test_playlist_is_handled_by_one_process(v.get('process'), \
+                                f'(get_playlists_info_from_local)p{p}(select ffmpeg merge task that judge false)')):
+                            self.logger.info(f'pid {os.getpid()} select p{p} to merge')
+                            local_playlists_info[p]['process'] = (os.getpid(), datetime.now().timestamp()) #bili_get刚执行，会找出所有已下载待合并的剧集进行合并，此处将它们全部交由一个进程处理
+                f.truncate(0)
+                f.seek(0)
+                pickle.dump(local_playlists_info, f, pickle.HIGHEST_PROTOCOL)
+                f.flush()
         self.logger.info(f'load local playlists info from {self.__local_playlists_info_path}')
         return local_playlists_info
+
+    def get_currently_downloaded_by_other_progress_playlist_p_num(self):
+        p_list = []
+        for p,v in self.playlists_info.items():
+            if (v['download_flag'] != 3) and self.test_playlist_is_handled_by_others(v.get('process'), \
+                    f'(get_currently_downloaded_by_other_progress_playlist_p_num)p{p}(test if it is currently downloaded by other bili_get process)'):
+                p_list.append(p)
+        if p_list:
+            self.logger.info(f"{','.join(['p'+str(i) for i in p_list])} is currently downloaded by other bili_get progress")
+        return p_list
+
+    def update_playlists_info_from_local(self): #从本地更新self.playlists_info并选取一个待下载任务
+        local_playlists_info = self.get_playlists_info_from_local(need_to_lock_merge_task=False)
+        for p,v in self.playlists_info.items():
+            if (v.get('process') is None) or (v['process'][0] != os.getpid()):
+                continue
+            if (local_playlists_info[p]['download_flag'] != 3) or (not local_playlists_info[p]['merge_flag']):
+                local_playlists_info[p] = v
+        self.playlists_info = local_playlists_info
+        return self.playlists_info
+
+    def test_playlist_is_handled_by_self(self, process_info, desc=None): #根据剧集信息判断其是否正在被当前bili_get进程处理
+        if not process_info:
+            return False
+        if process_info[0] != os.getpid():
+            return False
+        if self.test_playlist_is_handled_by_one_process(process_info, desc=desc):
+            return True
+        return False
+
+    def test_playlist_is_handled_by_others(self, process_info, desc=None): #根据剧集信息判断其是否正在被其他bili_get进程处理
+        if not process_info:
+            return False
+        if (process_info[0] != os.getpid()) and self.test_playlist_is_handled_by_one_process(process_info, desc=desc):
+            return True
+        return False
+
+    def test_playlist_is_handled_by_one_process(self, process_info, desc=None): #判断剧集是否正在被其记录的进程所处理，如果没有被任何有效进程处理则返回False
+        if not process_info:
+            return False
+        try:
+            pid, timestamp = process_info
+            process = psutil.Process(pid)
+            judge, reason = True, 'null'
+            if process.create_time() > timestamp:
+                judge, reason = False, 'pid create time is latter than playlist record process time'
+            elif 'python' not in process.name().lower():
+                judge, reason = False, 'this is not a python process'
+            elif passed_time_exceeds_specified_hours(timestamp, 1): #如果某个进程下载一个视频一个小时还未完成，说明该进程存在错误卡住或
+                            #根本不是bili_get下载进程（只是碰巧该进程号存在且过了前面两个if判断而已），则当前bili_get进程也会尝试下载它
+                judge, reason = False, 'process time too long that exceeds one hour, may not be bili_get program or process stuck'
+            self.logger.info(f'{desc if desc else "the playlist"} is processed by pid {pid}, timestamp is {timestamp2str(timestamp)}. '
+                f'get pid info: name({process.name()}), status({process.status()}), create_time({timestamp2str(process.create_time())}), '
+                f'parent_pid({process.ppid()}), memory_info({process.memory_info()}). judge: {judge}' + (f', reason: {reason}' if not judge else ''))
+            return judge
+        except psutil.NoSuchProcess:
+            return False
+
+    def update_local_already_download_p_list(self, playlists_info=None):
+        if playlists_info is None:
+            playlists_info = self.playlists_info
+        self.__local_already_download_p_list = \
+            [(v['p_num'] if v.get('p_num') else k) for k,v in playlists_info.items() if v['download_flag'] == 3]
 
     def get_danmu_urls(self):
         api = 'https://api.bilibili.com/x/web-interface/view?bvid=' + self.__bvid
@@ -621,7 +844,7 @@ class Bilibili:
             if not self.logger_concole_handler_add_once:
                 Bilibili.logger_concole_handler_add_once = True
                 self.logger.addHandler(self.logger_console_handler)
-        file_log_handler = RotatingFileHandler(filename=get_absolute_path(f'./bili_tmp/download.log'), 
+        file_log_handler = RotatingFileHandler(filename=get_absolute_path(f'./bili_tmp/download.{os.getpid()}.{datetime.now().timestamp()}.log'), 
                                                maxBytes=1024*1024, backupCount=3, encoding='utf-8') #logging.FileHandler(filename='log', encoding='utf-8')
         file_log_handler.setFormatter(logging.Formatter('%(asctime)s[%(name)s] - %(pathname)s[line:%(lineno)d(%(funcName)s)] - %(levelname)s: %(message)s'))
         file_log_handler.setLevel(logging.INFO)

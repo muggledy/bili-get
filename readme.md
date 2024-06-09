@@ -85,6 +85,8 @@ Note: this is a multi-episode video, you can download them all at once with --pl
 
 - 默认随视频会下载弹幕XML文件，可以使用[danmu2ass](https://github.com/ikde/danmu2ass)做弹幕格式转换，双击Danmu2Ass.sln，用Visual Studio打开并编译，在项目Danmu2Ass目录下会生成bin文件夹，进入其中的Debug文件夹，可以看到一个Kaedei.Danmu2Ass.exe可执行文件，将视频和弹幕文件一块拖动到该可执行文件图标上去即可生成ASS字幕文件，再通过[potplayer](https://potplayer.daum.net/)打开视频即可自动加载字幕
 
+- 对于多剧集视频，支持一种特殊的多进程下载方式：开启多个终端窗口，分别执行同一个下载命令`bili-get https://www.bilibili.com/video/BV16S4y1C7ad --playlist`，不同的bili-get进程将互相协作各自选取不同的剧集号进行下载。原理简单来说就是：本地存储了一个临时文件用于记录当前多剧集视频的下载进度，将该文件抽象为一个待下载剧集号池子，不同bili-get进程通过文件锁的方式互斥地访问该临时文件、即互斥地从待下载剧集号池中锁定各自想要下载的剧集号，每个进程每次只会从池子中选取一个下载任务，下载完再从池子中选取另一个任务。另注意，多进程下载不支持`--force`参数，其行为未定义
+
 ## 致谢
 
 如果觉得本工具有用，请点个Star呗~，有bug或有改进意见请提issue，thx！
