@@ -10,6 +10,7 @@ from copy import deepcopy
 from . import utils
 from .file_lock import LockedFile
 from datetime import datetime
+from itertools import count
 if platform.system() == 'Windows':
     from .chrome_cookie import get_bilibili_cookie
 
@@ -56,10 +57,11 @@ class Bilibili:
                 os.remove(self.__local_playlists_info_path)
             __local_playlists_info = {}
             self.__local_already_download_p_list = []
+            self.initialize_local_download_progress_info()
         else:
-            if not self.force_re_download: #多进程协作下载仅针对不带--force参数的情况，否则行为无法预测，特此声明！
-                if not self.initialize_local_download_progress_info():
-                    return
+            #多进程协作下载仅针对不带--force参数的情况，否则行为属于未定义，特此声明！
+            if not self.initialize_local_download_progress_info():
+                return
             #首先从本地获取视频信息并填充到self.playlists_info，如果视频（含子剧集）未全部下载完成，则
             #针对未下载剧集需要重新从B站服务器获取相应的剧集信息并更新本地数据
             __local_playlists_info = self.get_playlists_info_from_local()
@@ -254,10 +256,19 @@ class Bilibili:
                     if origin_video_is_downloaded_by_self:
                         self.download_by_playlists_info(which_p=origin_video_info['p_num'])
                 if self.fetch_playlists and (origin_video_info['videos'] > 1): #遍历剧集号，只有那些被当前进程锁定的未下载剧集才会被当前进程执行下载，否则直接跳过
-                    for p in range(1, origin_video_info['videos']+1):
+                    to_download_p_list = list(range(1, origin_video_info['videos']+1))
+                    for iter_i in count():
+                        if (len(to_download_p_list) == 0) or (iter_i > 200):
+                            break
+                        p = to_download_p_list.pop(0)
+                        self.logger.info(f'iter to p{p} and try to lock it...')
+                        if (p == origin_video_info['p_num']) or (p in self.__local_already_download_p_list):
+                            self.logger.info(f'p{p} is already downloaded, iter next')
+                            continue
                         self.update_playlists_info_from_local() #每次只选取并锁定一个剧集，下载完，需要重新选取并锁定另一个剧集下载
                         self.update_local_already_download_p_list()
-                        if (p == origin_video_info['p_num']) or (p in self.__local_already_download_p_list):
+                        if p in self.__local_already_download_p_list:
+                            self.logger.info(f'p{p} is already downloaded, iter next')
                             continue
                         if p not in [_p for _p,_v in self.playlists_info.items() if ((_v.get('process') is not None) and (_v['process'][0]==os.getpid())) \
                                 and ((_v.get('download_flag') is None) or ((_v.get('download_flag') is not None) and (_v['download_flag']!=3)))]:
@@ -275,6 +286,8 @@ class Bilibili:
                                 self.update_newest_playlists_info({sub_video_info['p_num']:sub_video_info})
                                 if self.__download_at_once:
                                     self.download_by_playlists_info(which_p=sub_video_info['p_num'])
+                                    if self.playlists_info[sub_video_info['p_num']]['download_flag'] != 3:
+                                        to_download_p_list = [sub_video_info['p_num']] + to_download_p_list
                             else:
                                 if self.disable_console_log:
                                     print(f'Error: analyse sub url {self.origin_url} html page failed')
@@ -335,6 +348,8 @@ class Bilibili:
                                                 [video_quality_2_str[v['id']], (v['width'], v['height']), []]))
                     codec_info = f"{v['codecs']}_{v['bandwidth']}_{v['frameRate']}"
                     video_info[v['id']]['urls'].append((v['baseUrl'], codec_info))
+                    video_info[v['id']]['urls'].extend([(_1, f'{codec_info}.backup1.{_2}') for _1,_2 in enumerate(v['backupUrl'],1)])
+                    video_info[v['id']]['urls'].extend([(_1, f'{codec_info}.backup2.{_2}') for _1,_2 in enumerate(v['backup_url'],1)])
             ret_info['video_info'] = video_info
             ret_info['audio_url'] = window_playinfo['data']['dash']['audio'][0]['baseUrl']
             ret_info['author'] = dict(zip(['name', 'id'], \
@@ -553,7 +568,9 @@ class Bilibili:
                         playlists_info[p]['merge_flag'] = True
                         if flag:
                             self.playlists_info = playlists_info
-                        self.save_playlists_info_into_local()
+                            self.save_playlists_info_into_local()
+                        else:
+                            self.save_playlists_info_into_local(playlists_info)
                 else:
                     n1 += 1 #之前已经合成的数量
             else:

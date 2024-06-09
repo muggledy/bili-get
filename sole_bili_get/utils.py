@@ -115,7 +115,7 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                     if _utils_debug: print(f'remove {self.save_path} for no record in {self.download_info_file}')
                     os.remove(self.save_path)
             if _utils_debug: print(f'headers = {self.headers}, cookies = {str(self.cookies)}')
-            with closing(requests.get(self.url, headers=self.headers, cookies=self.cookies, stream=True)) as response:
+            with closing(requests.get(self.url, headers=self.headers, cookies=self.cookies, stream=True, timeout=(10, 30))) as response:
                 #print(response.headers)
                 if not response.ok:
                     if _utils_debug: print(f'Error: request get {self.url} failed for {response.reason}')
