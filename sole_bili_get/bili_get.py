@@ -131,7 +131,7 @@ class Bilibili:
         if not self.playlists_info:
             return (0,0,0,0,0,0,0)
         current_info = sorted([(p_num, info['download_flag'], info['merge_flag']) for p_num, info in self.playlists_info.items()], key=lambda x:x[0])
-        total = self.playlists_info[current_info[0][0]]['videos']
+        total = self.playlists_info[[_[0] for _ in current_info if self.playlists_info[_[0]].get('videos')][0]]['videos']
         downloaded = len([info for info in current_info if info[1] == 3])
         not_download = len([info for info in current_info if len(self.playlists_info[info[0]]) == 3]) #如果info形如
                             #{'download_flag':0, 'merge_flag':False, 'process':None}，说明还未被任何bili_get进程下载
@@ -283,8 +283,14 @@ class Bilibili:
                         if p in self.__local_already_download_p_list:
                             self.logger.info(f'p{p} is already downloaded, iter next')
                             continue
-                        if p not in [_p for _p,_v in self.playlists_info.items() if ((_v.get('process') is not None) and (_v['process'][0]==os.getpid())) \
-                                and ((_v.get('download_flag') is None) or ((_v.get('download_flag') is not None) and (_v['download_flag']!=3)))]:
+                        locked_p = sorted([_p for _p,_v in self.playlists_info.items() if ((_v.get('process') is not None) and (_v['process'][0]==os.getpid())) \
+                                and ((_v.get('download_flag') is None) or ((_v.get('download_flag') is not None) and (_v['download_flag']!=3)))])
+                        if not locked_p: #没有锁定的待下载剧集，说明已全部完成下载，立即结束下载流程
+                            self.logger.info(f'no video is locked for current bili-get process to download, break download progress')
+                            break
+                        if p not in locked_p: #当前要下载的剧集号p不是当前锁定的待下载剧集号locked_p，则立即将锁定的剧集号插入到to_download_p_list队头，下载该锁定的剧集
+                            to_download_p_list = locked_p[0] + [p] + to_download_p_list
+                            self.logger.info(f'currently locked undownloaded p{locked_p[0]} is re-insert to_download_p_list to download')
                             continue
                         try:
                             sub_url = self.generate_bilibili_video_url(origin_video_info['bvid'], p)
@@ -299,7 +305,7 @@ class Bilibili:
                                 self.update_newest_playlists_info({sub_video_info['p_num']:sub_video_info})
                                 if self.__download_at_once:
                                     self.download_by_playlists_info(which_p=sub_video_info['p_num'])
-                                    if self.playlists_info[sub_video_info['p_num']]['download_flag'] != 3:
+                                    if self.playlists_info[sub_video_info['p_num']]['download_flag'] != 3: #下载失败则重新插入to_download_p_list队头，继续尝试下载之，而非跳过
                                         to_download_p_list = [sub_video_info['p_num']] + to_download_p_list
                             else:
                                 if self.disable_console_log:
@@ -364,9 +370,15 @@ class Bilibili:
                     if v.get('base_url'):
                         video_info[v['id']]['urls'].append((v['base_url'], f'{codec_info}.base2'))
                     if v.get('backupUrl'):
-                        video_info[v['id']]['urls'].extend([(_2, f'{codec_info}.backup1.{_1}') for _1,_2 in enumerate(v['backupUrl'],1)])
+                        if type(v['backupUrl']) == list:
+                            video_info[v['id']]['urls'].extend([(_2, f'{codec_info}.backup1.{_1}') for _1,_2 in enumerate(v['backupUrl'],1)])
+                        else:
+                            video_info[v['id']]['urls'].append((v['backupUrl'], f'{codec_info}.backup1'))
                     if v.get('backup_url'):
-                        video_info[v['id']]['urls'].extend([(_2, f'{codec_info}.backup2.{_1}') for _1,_2 in enumerate(v['backup_url'],1)])
+                        if type(v['backup_url']) == list:
+                            video_info[v['id']]['urls'].extend([(_2, f'{codec_info}.backup2.{_1}') for _1,_2 in enumerate(v['backup_url'],1)])
+                        else:
+                            video_info[v['id']]['urls'].append((v['backup_url'], f'{codec_info}.backup2'))
             ret_info['video_info'] = video_info
             ret_info['audio_url'] = []
             for v in window_playinfo['data']['dash']['audio']:
@@ -374,9 +386,11 @@ class Bilibili:
                 if v.get('base_url'):
                     ret_info['audio_url'].append(v['base_url'])
                 if v.get('backupUrl'):
-                    ret_info['audio_url'].append(v['backupUrl'])
+                    if type(v['backupUrl']) == list: ret_info['audio_url'].extend(v['backupUrl'])
+                    else: ret_info['audio_url'].append(v['backupUrl'])
                 if v.get('backup_url'):
-                    ret_info['audio_url'].append(v['backup_url'])
+                    if type(v['backup_url']) == list: ret_info['audio_url'].extend(v['backup_url'])
+                    else: ret_info['audio_url'].append(v['backup_url'])
             ret_info['author'] = dict(zip(['name', 'id'], \
                 [window_initial_state['videoData']['owner']['name'], window_initial_state['videoData']['owner']['mid']]))
             ret_info['cover'] = window_initial_state['videoData']['pic']
@@ -640,7 +654,7 @@ class Bilibili:
                 f.flush()
                 self.logger.info(f'pid {init_info[1]} start bili_get firstly at {timestamp2str(init_info[2])}...')
                 return True
-        prompt = f'pid {os.getpid()} can\'t start bili_get for unknown reason'
+        prompt = f'pid {os.getpid()} can\'t start bili_get for unknown reason, you can delete {self.__local_playlists_info_path} and try again'
         self.logger.error(prompt)
         if self.disable_console_log: print(prompt)
         return False
