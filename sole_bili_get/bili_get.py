@@ -11,6 +11,7 @@ from . import utils
 from .file_lock import LockedFile
 from datetime import datetime
 from itertools import count
+from .av2bv import av2bv
 if platform.system() == 'Windows':
     from .chrome_cookie import get_bilibili_cookie
 
@@ -152,6 +153,18 @@ class Bilibili:
         if hasattr(self, f'_{self.__class__.__name__}__origin_url') \
                 and (origin_url == self.__origin_url):
             return
+        avid = re.findall(r'list/([^/\?]+)', origin_url)
+        if avid:
+            try:
+                converted_bvid = av2bv(int(avid[0]))
+                _origin_url = origin_url
+                origin_url = self.generate_bilibili_video_url(converted_bvid)
+                prompt = f'convert origin request url from {_origin_url} to {origin_url}'
+                self.logger.info(prompt)
+                if self.disable_console_log:
+                    print(prompt)
+            except Exception as e:
+                self.logger.error(f'convert {origin_url} failed for {e}')
         self.__origin_url = origin_url
         bvid = re.findall(r'video/([^/\?]+)', self.__origin_url)
         if bvid: #key id
@@ -347,11 +360,23 @@ class Bilibili:
                         video_info[v['id']] = dict(zip(['quality', 'size', 'urls'], \
                                                 [video_quality_2_str[v['id']], (v['width'], v['height']), []]))
                     codec_info = f"{v['codecs']}_{v['bandwidth']}_{v['frameRate']}"
-                    video_info[v['id']]['urls'].append((v['baseUrl'], codec_info))
-                    video_info[v['id']]['urls'].extend([(_1, f'{codec_info}.backup1.{_2}') for _1,_2 in enumerate(v['backupUrl'],1)])
-                    video_info[v['id']]['urls'].extend([(_1, f'{codec_info}.backup2.{_2}') for _1,_2 in enumerate(v['backup_url'],1)])
+                    video_info[v['id']]['urls'].append((v['baseUrl'], f'{codec_info}.base1'))
+                    if v.get('base_url'):
+                        video_info[v['id']]['urls'].append((v['base_url'], f'{codec_info}.base2'))
+                    if v.get('backupUrl'):
+                        video_info[v['id']]['urls'].extend([(_2, f'{codec_info}.backup1.{_1}') for _1,_2 in enumerate(v['backupUrl'],1)])
+                    if v.get('backup_url'):
+                        video_info[v['id']]['urls'].extend([(_2, f'{codec_info}.backup2.{_1}') for _1,_2 in enumerate(v['backup_url'],1)])
             ret_info['video_info'] = video_info
-            ret_info['audio_url'] = window_playinfo['data']['dash']['audio'][0]['baseUrl']
+            ret_info['audio_url'] = []
+            for v in window_playinfo['data']['dash']['audio']:
+                ret_info['audio_url'].append(v['baseUrl'])
+                if v.get('base_url'):
+                    ret_info['audio_url'].append(v['base_url'])
+                if v.get('backupUrl'):
+                    ret_info['audio_url'].append(v['backupUrl'])
+                if v.get('backup_url'):
+                    ret_info['audio_url'].append(v['backup_url'])
             ret_info['author'] = dict(zip(['name', 'id'], \
                 [window_initial_state['videoData']['owner']['name'], window_initial_state['videoData']['owner']['mid']]))
             ret_info['cover'] = window_initial_state['videoData']['pic']
@@ -451,48 +476,52 @@ class Bilibili:
                         self.save_playlists_info_into_local()
                         if download_only_one: break
                     else:
-                        self.__all_downloed_flag = False
                         self.logger.error(f"download video from {self.__crawler.url} failed for {self.__crawler.error_info}")
-                        if self.disable_console_log:
-                            print(f"Error: download p{p} video failed, you can re-exec this command later")
             else:
                 self.logger.info(f"p{p} video has been downloaded in {self.__output_dir}")
             if self.playlists_info[p]['download_flag'] == 0:
+                self.__all_downloed_flag = False
+                if self.disable_console_log:
+                    print(f"Error: download p{p} video failed, you can re-exec this command later")
                 continue
             downloading_audio_info = "start to download " + colored_text(f"p{p}(audio)", 'blue') + "..."
             self.logger.info(downloading_audio_info)
             if self.disable_console_log:
                 print(downloading_audio_info)
-            self.__crawler.url = info['audio_url']
-            self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}_audio.mp3")) #audio may also be *.mp4 file 
-                                                        #which is the same with video filename in this case, we rename it to *.mp3
-            if ((self.__force_re_download_p == float('inf')) or (self.__force_re_download_p == p)) and os.path.exists(self.__crawler.save_path):
-                self.logger.warning(f'delete old p{p} audio file {self.__crawler.save_path} and re-download it')
-                os.remove(self.__crawler.save_path)
-            start_time = time.time()
-            ok = self.__crawler.get()
-            if ok:
-                self.logger.info(f"download audio from {self.__crawler.url} into {self.__crawler.save_path} succeed, runtime: {time.time()-start_time:.2f}s")
-                if os.path.exists(self.__crawler.save_path):
-                    if self.playlists_info[p].get('video_save_path') and \
-                            (self.playlists_info[p]['video_save_path'] == \
-                            os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}{os.path.splitext(self.__crawler.save_path)[1]}"))):
-                        self.playlists_info[p]['audio_save_path'] = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}.mp3"))
-                    else:
-                        self.playlists_info[p]['audio_save_path'] = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}{os.path.splitext(self.__crawler.save_path)[1]}"))
-                    self.logger.warning(f'rename audio file {self.__crawler.save_path} => {self.playlists_info[p]["audio_save_path"]}')
-                    if os.path.exists(self.playlists_info[p]['audio_save_path']):
-                        os.remove(self.playlists_info[p]['audio_save_path'])
-                    os.rename(self.__crawler.save_path, self.playlists_info[p]['audio_save_path'])
-                self.playlists_info[p]['download_flag'] += 2
-                self.save_playlists_info_into_local() #立即保存下载进度，避免因合成失败导致下次还要重复下载音频文件
-                if self.auto_merge and (not self.playlists_info[p]['merge_flag']) \
-                        and self.merge_video_and_audio(self.playlists_info[p]['video_save_path'], self.playlists_info[p]['audio_save_path']):
-                    self.playlists_info[p]['merge_flag'] = True
-                self.save_playlists_info_into_local()
-            else:
+            for audio_url in info['audio_url']:
+                self.__crawler.url = audio_url
+                self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}_audio.mp3")) #audio may also be *.mp4 file 
+                                                            #which is the same with video filename in this case, we rename it to *.mp3
+                if ((self.__force_re_download_p == float('inf')) or (self.__force_re_download_p == p)) and os.path.exists(self.__crawler.save_path):
+                    self.logger.warning(f'delete old p{p} audio file {self.__crawler.save_path} and re-download it')
+                    os.remove(self.__crawler.save_path)
+                start_time = time.time()
+                ok = self.__crawler.get()
+                if ok:
+                    self.logger.info(f"download audio from {self.__crawler.url} into {self.__crawler.save_path} succeed, runtime: {time.time()-start_time:.2f}s")
+                    if os.path.exists(self.__crawler.save_path):
+                        if self.playlists_info[p].get('video_save_path') and \
+                                (self.playlists_info[p]['video_save_path'] == \
+                                os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}{os.path.splitext(self.__crawler.save_path)[1]}"))):
+                            self.playlists_info[p]['audio_save_path'] = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}.mp3"))
+                        else:
+                            self.playlists_info[p]['audio_save_path'] = \
+                                os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}{os.path.splitext(self.__crawler.save_path)[1]}"))
+                        self.logger.warning(f'rename audio file {self.__crawler.save_path} => {self.playlists_info[p]["audio_save_path"]}')
+                        if os.path.exists(self.playlists_info[p]['audio_save_path']):
+                            os.remove(self.playlists_info[p]['audio_save_path'])
+                        os.rename(self.__crawler.save_path, self.playlists_info[p]['audio_save_path'])
+                    self.playlists_info[p]['download_flag'] += 2
+                    self.save_playlists_info_into_local() #立即保存下载进度，避免因合成失败导致下次还要重复下载音频文件
+                    if self.auto_merge and (not self.playlists_info[p]['merge_flag']) \
+                            and self.merge_video_and_audio(self.playlists_info[p]['video_save_path'], self.playlists_info[p]['audio_save_path']):
+                        self.playlists_info[p]['merge_flag'] = True
+                    self.save_playlists_info_into_local()
+                    break
+                else:
+                    self.logger.error(f"download audio from {self.__crawler.url} failed for {self.__crawler.error_info}")
+            if self.playlists_info[p]['download_flag'] != 3:
                 self.__all_downloed_flag = False
-                self.logger.error(f"download audio from {self.__crawler.url} failed for {self.__crawler.error_info}")
                 if self.disable_console_log:
                     print(f"Error: download p{p} audio failed, you can re-exec this command later")
 
