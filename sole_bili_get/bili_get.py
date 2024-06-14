@@ -2,7 +2,7 @@ from .utils import *
 import requests, logging, \
     re, json, pickle, os, \
     subprocess, platform, sys, \
-    time, argparse, colorama, psutil
+    time, argparse, colorama, psutil, random
 from logging.handlers import RotatingFileHandler
 #from lxml import etree
 from pathlib import Path
@@ -37,7 +37,9 @@ class Bilibili:
         self.debug_all = kwargs.get('debug_all', False)
         utils._utils_debug = self.debug_all
         self.auto_merge = kwargs.get('auto_merge', True)
-        self.__crawler = Crawler(None, headers=self.headers)
+        self.__crawler = Crawler(None, headers=self.headers, multi_thread_num=kwargs.get('multi_thread_num', 0),
+                                 #proxies={'http':'socks5://127.0.0.1:10808','https':'socks5://127.0.0.1:10808'})
+        )
         self.__download_at_once = True #每获取并解析一个剧集页面，就立即开始下载，而非等到收集完全部剧集信息后再遍历下载
 
     def start(self):
@@ -491,6 +493,7 @@ class Bilibili:
                         if download_only_one: break
                     else:
                         self.logger.error(f"download video from {self.__crawler.url} failed for {self.__crawler.error_info}")
+                        time.sleep(random.choice([sleep_sec * 0.1 for sleep_sec in range(10, 20)])) #惩罚
             else:
                 self.logger.info(f"p{p} video has been downloaded in {self.__output_dir}")
             if self.playlists_info[p]['download_flag'] == 0:
@@ -499,10 +502,10 @@ class Bilibili:
                     print(f"Error: download p{p} video failed, you can re-exec this command later")
                 continue
             downloading_audio_info = "start to download " + colored_text(f"p{p}(audio)", 'blue') + "..."
-            self.logger.info(downloading_audio_info)
             if self.disable_console_log:
                 print(downloading_audio_info)
             for audio_url in info['audio_url']:
+                self.logger.info(downloading_audio_info)
                 self.__crawler.url = audio_url
                 self.__crawler.save_path = os.path.normpath(os.path.join(self.__output_dir, f"{info['title']}_audio.mp3")) #audio may also be *.mp4 file 
                                                             #which is the same with video filename in this case, we rename it to *.mp3
@@ -534,6 +537,7 @@ class Bilibili:
                     break
                 else:
                     self.logger.error(f"download audio from {self.__crawler.url} failed for {self.__crawler.error_info}")
+                    time.sleep(random.choice([sleep_sec * 0.1 for sleep_sec in range(10, 20)])) #惩罚
             if self.playlists_info[p]['download_flag'] != 3:
                 self.__all_downloed_flag = False
                 if self.disable_console_log:
@@ -871,6 +875,11 @@ class Bilibili:
             return self.playlists_info
         return playlists_info
 
+    def clear_crawler_thread_pool_resource(self):
+        if self.__crawler is None:
+            return
+        self.__crawler.clear_thread_pool_resource()
+
     @property
     def disable_console_log(self):
         return self.__disable_console_log
@@ -930,6 +939,7 @@ def main():
     parser.add_argument('--debug', action="store_true", help='open all debug')
     parser.add_argument('--playlist', action="store_true", help='download video playlists')
     parser.add_argument('--force', action="store_true", help='force to re-download videos')
+    parser.add_argument('-t', '--threads', type=int, default=0, help='auxiliary download threads num, total number is (threads+1), you can set `-t 0` to disable multithreading')
     parser.add_argument('--nomerge', action="store_true", help='don\'t auto merge videos and audios')
     
     args = parser.parse_args()
@@ -956,14 +966,15 @@ def main():
         cookies = None
     if args.debug:
         print(f"input params: url({url}), quality({args.quality}), cookie({str(cookies)}), "
-              f"output({output}), download_playlist({args.playlist}), force_download({args.force}), not_merge({args.nomerge})")
+              f"output({output}), total_download_threads({args.threads}), download_playlist({args.playlist}), force_download({args.force}), not_merge({args.nomerge})")
     else:
         print(f'output: {output}')
     bilibili = Bilibili(url, disable_console_log=False if args.debug else True, 
         fetch_playlists=args.playlist, quality=args.quality, force_re_download=args.force, base_dir=output, 
         auto_merge=True if not args.nomerge else False, ffmpeg_debug=True if args.debug else False, 
-        remove_merge_materials=True, debug_all=args.debug, headers={}, cookies=cookies)
+        remove_merge_materials=True, debug_all=args.debug, headers={}, cookies=cookies, multi_thread_num=args.threads)
     bilibili.start()
+    bilibili.clear_crawler_thread_pool_resource()
 
 if __name__ == '__main__':
     '''bilibili = Bilibili('https://www.bilibili.com/video/BV1z84y1r7Tc', disable_console_log=True, 

@@ -75,6 +75,8 @@ Note: this is a multi-episode video, you can download them all at once with --pl
 
 - `-q`或`--quality`用于指定要下载的视频质量（清晰度），可选值有`MAX`（最高质量，缺省值）、`MIN`（最低质量）、`MANUAL`（手动选择视频质量）
 
+- 支持多线程下载，`-t`或`--threads`用于指定额外的下载线程数（缺省值为0，表示不启用多线程），譬如指定`-t 3`，加上主线程，总计会有1+3=4个线程同时下载单个视频二进制文件，不同线程分别下载视频的不同部分，并且只有在平均每个线程被分派下载的字节数>4M时才会真的启用多线程，即对于小文件，仍是采用单个主线程下载
+
 - `--nomerge`表示是否自动合成下载下来的音视频文件，默认合成，但需要提前下载[ffmpeg](https://ffmpeg.org/download.html)工具（如[windows版本](https://www.gyan.dev/ffmpeg/builds/)）并将其路径添加到`PATH`环境变量
 
 - `--force`表示强制重新下载视频，如果没有指定`--playlist`参数，则只是重新下载当前剧集，否则会直接删除`bili_tmp/`临时文件，重新下载全部剧集，但不会立即删除全部已下载音视频文件，而是覆盖更新
