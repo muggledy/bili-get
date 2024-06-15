@@ -4,6 +4,7 @@ from contextlib import closing
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
+from itertools import count
 
 __all__ = ["get_absolute_path", "find_json_dict_from_text", "Crawler", 
            "parse_cookies", "colored_text", "timestamp2str", "is_time_in_oneday", 
@@ -92,7 +93,16 @@ class ProgressBar:
         if self.count >= self.total:
             end_str = '\n'
             self.state="下载完成"
-        print(self.__get_info(), end=end_str)
+        if not _utils_debug:
+            print(self.__get_info(), end=end_str)
+        else:
+            print(self.__get_info())
+
+    def exit(self):
+        if self.count < self.total:
+            end_str = '\n'
+            self.state="下载失败"
+            print(self.__get_info(), end=end_str)
 
 class Crawler: #当前只能用于下载二进制文件，待完善改进
     def __init__(self, url, **kwargs):
@@ -115,6 +125,7 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
         self.progress = None
 
     def get(self):
+        self.error_info = ''
         if (self.url is None) or (not self.url.startswith('http')):
             self.error_info = f'request url {self.url} is invalid'
             if _utils_debug: print(f'Error: {self.error_info}')
@@ -165,6 +176,7 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                 return multi_thread_download_ret
             self.headers['Range'] = f"bytes={start_byte}-{end_byte}"
             if _utils_debug: print(f'headers = {self.headers}, cookies = {str(self.cookies)}')
+            time.sleep(random.choice([sleep_sec * 0.1 for sleep_sec in range(0, 5)])) #惩罚
             with closing(requests.get(self.url, headers=self.headers, cookies=self.cookies, stream=True, timeout=self.timeout, proxies=self.proxies)) as response:
                 #print(response.headers)
                 if not response.ok:
@@ -174,17 +186,25 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                 if self.show_progress:
                     progress = ProgressBar(response.headers['Content-Type'], 0, total=total_size)
                     progress.refresh(count=start_byte)
-                iter_num = 0
+                already_download_bytes_sum = start_byte
                 with open(self.save_path, 'ab') as save_f:
                     for data in response.iter_content(chunk_size=self.chunk_size):
                         if self.show_progress:
                             progress.refresh(count=len(data))
+                        already_download_bytes_sum += len(data)
                         save_f.write(data)
                         save_f.flush()
-                        iter_num += 1
-                        self.save_info_into_local_tmp_file(start_byte+iter_num*self.chunk_size)
-                if _utils_debug: print(f'download success, saved into {self.save_path}, consume time:{time.time()-start_time:.2f}s')
-                self.save_info_into_local_tmp_file(total_size, already_download=True)
+                        self.save_info_into_local_tmp_file(already_download_bytes_sum)
+                if self.show_progress:
+                    progress.exit()
+                if already_download_bytes_sum == total_size:
+                    if _utils_debug: print(f'download success, saved into {self.save_path}, consume time:{time.time()-start_time:.2f}s')
+                    self.save_info_into_local_tmp_file(total_size, already_download=True)
+                else:
+                    _error_info = f'(download failed)unknown reason, already_download_bytes_sum:{already_download_bytes_sum} bytes, total:{total_size} bytes'
+                    if _utils_debug: print(_error_info)
+                    self.error_info = _error_info
+                    return False
                 return True
         except Exception as e:
             if self.save_file_obj is not None:
@@ -195,7 +215,7 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
             if _utils_debug: print(f"Error(Crawler): get {self.url} failed for "
                                    f'exception([{e.__traceback__.tb_frame.f_globals["__file__"]}:'
                                    f'{e.__traceback__.tb_lineno}] {e}) occurs when analyse playinfo')
-            self.error_info = e
+            self.error_info = str(e)
             self.save_info_into_local_tmp_file(0)
             return False
 
@@ -227,6 +247,7 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                     self.error_info = response.reason
                     return False
                 pos = start_byte
+                already_download_bytes_sum = 0
                 for data in response.iter_content(chunk_size=self.chunk_size):
                     self.save_file_lock.acquire()
                     self.save_file_obj.seek(pos)
@@ -234,11 +255,22 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
                     if self.show_progress and (self.progress is not None):
                         self.progress.refresh(count=len(data))
                     self.save_file_lock.release()
-                    pos += self.chunk_size
-            if _utils_debug: print(f'thread-{threading.get_ident()} download bytes({start_byte}:{end_byte}) success')
+                    already_download_bytes_sum += len(data)
+                    pos += len(data)
+            if already_download_bytes_sum == (end_byte - start_byte + 1):
+                if _utils_debug: print(f'thread-{threading.get_ident()} download bytes({start_byte}:{end_byte}) success')
+            else:
+                _error_info = f'(thread-{threading.get_ident()} download failed)unknown reason, '\
+                    f'already_download_bytes_sum:{already_download_bytes_sum} bytes, total:{end_byte - start_byte + 1} bytes'
+                if _utils_debug: print(_error_info)
+                self.progress.refresh(count=(-already_download_bytes_sum))
+                self.error_info = _error_info
+                return False
             return True
         except Exception as e:
             if _utils_debug: print(f'Error: thread-{threading.get_ident()} download bytes({start_byte}:{end_byte}) failed for {e}')
+            self.progress.refresh(count=(-already_download_bytes_sum))
+            self.error_info = str(e)
             return False
 
     def download_with_threadpool(self, start_byte, end_byte):
@@ -249,7 +281,7 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
         intervals = divide_interval(start_byte, end_byte, threads_num, float_flag=False)
         intervals = list(zip(intervals, intervals[1:]))
         intervals = [intervals[0]] + [(_[0]+1,_[1]) for _ in intervals[1:]]
-        if _utils_debug: print(f'(download_with_threadpool) Crawler({self}) split {start_byte}:{end_byte}(bytes) into {intervals}')
+        if _utils_debug: print(f'(download_with_threadpool) Crawler({self}) split {start_byte}:{end_byte}(all is {end_byte-start_byte+1} bytes) into {intervals}')
         #workers = ThreadPoolExecutor(max_workers=threads_num)
         future_download = {self.workers.submit(self.download_one_block, start_byte=intervals[i][0], end_byte=intervals[i][1]):\
                        intervals[i] for i in range(threads_num)}
@@ -257,14 +289,20 @@ class Crawler: #当前只能用于下载二进制文件，待完善改进
         for task in as_completed(future_download):
             if not task.result():
                 failed_list.append(future_download[task])
-        if failed_list: #存在分块下载失败，再次尝试
-            future_download = {self.workers.submit(self.download_one_block, start_byte=i[0], end_byte=i[1]):\
-                       i for i in failed_list}
-            failed_list = []
-            for task in as_completed(future_download):
-                if not task.result():
-                    failed_list.append(future_download[task])
+        for retry_cnt in count(1):
+            if retry_cnt > 2:
+                break
+            if failed_list: #存在分块下载失败，再次尝试
+                if _utils_debug: print(f'try to download {failed_list} again({retry_cnt})...')
+                future_download = {self.workers.submit(self.download_one_block, start_byte=i[0], end_byte=i[1]):\
+                        i for i in failed_list}
+                failed_list = []
+                for task in as_completed(future_download):
+                    if not task.result():
+                        failed_list.append(future_download[task])
         #workers.shutdown(wait=True)
+        if self.show_progress and (self.progress is not None):
+            self.progress.exit()
         if failed_list:
             return False #二次下载失败
         return True

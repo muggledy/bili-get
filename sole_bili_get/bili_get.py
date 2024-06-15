@@ -138,7 +138,7 @@ class Bilibili:
         not_download = len([info for info in current_info if len(self.playlists_info[info[0]]) == 3]) #如果info形如
                             #{'download_flag':0, 'merge_flag':False, 'process':None}，说明还未被任何bili_get进程下载
         download_failed = total - downloaded - not_download
-        if self.__ffmpeg_exist:
+        if self.auto_merge and self.__ffmpeg_exist:
             merged = len([info for info in current_info if info[2]])
             not_merge = not_download
             merge_failed = total - merged - not_merge
