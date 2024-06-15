@@ -69,7 +69,7 @@ Note: this is a multi-episode video, you can download them all at once with --pl
 
   Cookie获取方式如下：
 
-  ![B站cookie获取方式](https://raw.githubusercontent.com/muggledy/bili-get/master/bilibili_cookie.jpg)
+  ![B站cookie获取方式](https://raw.githubusercontent.com/muggledy/bili-get/a14ab8d1d66f53ebcaae9c29c1e57688b30cde6d/bilibili_cookie.jpg)
 
   注：如果是Windows平台使用Chrome浏览器，可以指定`-c`参数为`chrome`，程序将自动从`./AppData/Local/Google/Chrome/User Data/default/Network/Cookies`读取B站的Cookie信息，譬如我们可以通过`bili-get https://www.bilibili.com/video/BV18G411D7FM -c chrome`命令下载1080p视频
 

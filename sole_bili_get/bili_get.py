@@ -2,7 +2,8 @@ from .utils import *
 import requests, logging, \
     re, json, pickle, os, \
     subprocess, platform, sys, \
-    time, argparse, colorama, psutil, random
+    time, argparse, colorama, \
+    psutil, random, sole_bili_get
 from logging.handlers import RotatingFileHandler
 #from lxml import etree
 from pathlib import Path
@@ -932,18 +933,27 @@ class Bilibili:
 
 def main():
     parser = argparse.ArgumentParser(description="A simple tool to download videos from bilibili{*≧∀≦}")
-    parser.add_argument('url', help='bilibili video url')
-    parser.add_argument('-q', '--quality', type=str, default='MAX', choices=['MAX', 'MIN', 'MANUAL'], help='select the video quality')
-    parser.add_argument('-c', '--cookie', type=str, default='', help='your bilibili website cookie')
-    parser.add_argument('-o', '--output', type=str, default='', help='videos and temp file\'s output directory, default is current working path')
-    parser.add_argument('--debug', action="store_true", help='open all debug')
-    parser.add_argument('--playlist', action="store_true", help='download video playlists')
-    parser.add_argument('--force', action="store_true", help='force to re-download videos')
-    parser.add_argument('-t', '--threads', type=int, default=0, help='auxiliary download threads num, total number is (threads+1), you can set `-t 0` to disable multithreading')
-    parser.add_argument('--nomerge', action="store_true", help='don\'t auto merge videos and audios')
+    parser.add_argument('url', nargs='?', type=str, default='', action='store', help='Bilibili video url(BV format)')
+    parser.add_argument('-q', '--quality', type=str, default='MAX', choices=['MAX', 'MIN', 'MANUAL'], help='Select the video quality, default is `MAX`')
+    parser.add_argument('-c', '--cookie', type=str, default='', help='Your bilibili website cookie. Support to get cookie from chrome automatically by `-c chrome` on windows')
+    parser.add_argument('-o', '--output', type=str, default='', 
+                        help='Videos and temp file\'s output directory, default is current working path, will create ./bili_tmp/ and ./bili_output/')
+    parser.add_argument('--debug', action="store_true", help='Open all debug on console')
+    parser.add_argument('--playlist', action="store_true", help='Download video playlists')
+    parser.add_argument('--force', action="store_true", help='Force to re-download videos')
+    parser.add_argument('-t', '--threads', type=int, default=0, help='Auxiliary download threads num, total number is (threads+1), you can set `-t 0` to disable multithreading')
+    parser.add_argument('--nomerge', action="store_true", help='Don\'t auto merge videos and audios')
+    parser.add_argument('-v', '--version', action="store_true", help='Show the version of bili-get')
     
     args = parser.parse_args()
+    if args.version:
+        print(sole_bili_get.__version__)
+        return
     url = args.url
+    if not url:
+        print('usage: bili-get [-h] [-q {MAX,MIN,MANUAL}] [-c COOKIE] [-o OUTPUT] [--debug] [--playlist] [--force] [-t THREADS] [--nomerge] [-v] url\n'
+              'bili-get: error: the following arguments are required: url')
+        return
     output = args.output
     if (output=='') or os.path.isfile(output):
         output = Path.cwd()
