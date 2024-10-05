@@ -8,7 +8,7 @@ https://blog.csdn.net/weixin_44015805/article/details/101076449
 https://cloud.tencent.com/developer/article/2114297
 python -m pip install --user --upgrade setuptools wheel
 python setup.py sdist bdist_wheel
-pip install dist\sole_bili_get-0.0.1-py3-none-any.whl
+pip (un)install dist\sole_bili_get-0.0.1-py3-none-any.whl
 pip show bili_get
 from bili_get import Bilibili
 bili-get --help

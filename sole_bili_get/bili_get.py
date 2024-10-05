@@ -16,7 +16,7 @@ from .av2bv import av2bv
 if platform.system() == 'Windows':
     from .chrome_cookie import get_bilibili_cookie
 
-__all__ = ['Bilibili', 'main']
+__all__ = ['Bilibili', 'main', 'get_bilibili_cookie']
 
 colorama.init(autoreset=True)
 

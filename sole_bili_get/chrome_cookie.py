@@ -37,6 +37,7 @@ def get_encryption_key():
         local_state = f.read()
         local_state = json.loads(local_state)
 
+    if utils._utils_debug: print(f'Get key({local_state["os_crypt"]["encrypted_key"]}) from {local_state_path}')
     # decode the encryption key from Base64
     key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
     # remove 'DPAPI' str
@@ -46,7 +47,12 @@ def get_encryption_key():
     # doc: http://timgolden.me.uk/pywin32-docs/win32crypt.html
     return win32crypt.CryptUnprotectData(key, None, None, None, 0)[1]
 
+#https://github.com/yt-dlp/yt-dlp/issues/10927#issuecomment-2383625644
+#https://stackoverflow.com/questions/79020341/what-does-the-v20-mean-in-chromium-based-browsers-encrypted-data
+#maybe we can get cookie from edge: https://gist.github.com/monSteRhhe/a921a7ea8f2b88088e5eee2de73ecd03
+#https://wiki.biligame.com/tools/%E5%9F%BA%E4%BA%8EPython%E7%9A%84API%E7%A4%BA%E4%BE%8B/%E8%87%AA%E5%8A%A8%E8%8E%B7%E5%8F%96cookie
 def decrypt_data(data, key):
+    '''Note: can only decrypt data that had the prefix of "v10" by AES-GCM-256'''
     try:
         # get the initialization vector
         iv = data[3:15]
@@ -55,11 +61,13 @@ def decrypt_data(data, key):
         cipher = AES.new(key, AES.MODE_GCM, iv)
         # decrypt password
         return cipher.decrypt(data)[:-16].decode()
-    except:
+    except Exception as e1:
+        if utils._utils_debug: print(f'Error: cipher.decrypt() failed for {e1}! try again...')
         try:
             return str(win32crypt.CryptUnprotectData(data, None, None, None, 0)[1])
-        except:
+        except Exception as e2:
             # not supported
+            if utils._utils_debug: print(f'Error: win32crypt.CryptUnprotectData() also failed for {e2}! return \'\'')
             return ""
 
 def get_domain_info(select=None, domain=None):
@@ -157,28 +165,32 @@ def get_cookies(db_select=None, domain_select=None, domain=None):
     # get the cookies from `cookies` table
     domain_name = get_domain_info(select=domain_select, domain=domain)
     if domain_name != '1':
-        cursor.execute(f"""
+        sql_cmd = f"""
         SELECT host_key, name, value, creation_utc, last_access_utc, expires_utc, encrypted_value
         FROM cookies
-        WHERE host_key like '{domain_name}' """)
+        WHERE host_key like '{domain_name}' """
     else:
-        cursor.execute("""
+        sql_cmd = """
         SELECT host_key, name, value, creation_utc, last_access_utc, expires_utc, encrypted_value 
-        FROM cookies""")
+        FROM cookies"""
         # you can also search by domain, e.g thepythoncode.com
         # cursor.execute("""
         # SELECT host_key, name, value, creation_utc, last_access_utc, expires_utc, encrypted_value
         # FROM cookies
         # WHERE host_key like '%thepythoncode.com%'""")
+    if utils._utils_debug: print(f'Command: {sql_cmd}')
+    cursor.execute(sql_cmd)
 
     # get the AES key
     key = get_encryption_key()
     for host_key, name, value, creation_utc, last_access_utc, expires_utc, encrypted_value in cursor.fetchall():
+        if utils._utils_debug: print(f'【KEY】host:{host_key}, name:{name}, value:{value}, encrypted_value:{encrypted_value}')
         if not value:
             decrypted_value = decrypt_data(encrypted_value, key)
         else:
             # already decrypted
             decrypted_value = value
+        if utils._utils_debug: print(f'【VALUE】decrypted_value:{decrypted_value}')
 
         # update the cookies table with the decrypted value
         # and make session cookie persistent
@@ -215,7 +227,7 @@ def get_bilibili_cookie():
         return None
     bili_ck = ''
     for ck in cookies:
-        if ck['Cookie name'] == 'SESSDATA':
+        if ck['Cookie name'] == 'SESSDATA': #https://github.com/BilibiliVideoDownload/BilibiliVideoDownload/wiki/%E8%8E%B7%E5%8F%96SESSDATA
             bili_ck += f"SESSDATA={ck['Cookie value (decrypted)']}"
             break
     bili_ck += '; CURRENT_QUALITY=112' #112为高清1080p+、80为高清1080p、64为高清、32为清晰、16为流畅

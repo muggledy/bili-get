@@ -67,11 +67,17 @@ Note: this is a multi-episode video, you can download them all at once with --pl
   Note: this is a multi-episode video, you can download them all at once with --playlist
   ```
 
-  Cookie获取方式如下：
+  Cookie获取方式如下（方式一）：
 
   ![B站cookie获取方式](https://raw.githubusercontent.com/muggledy/bili-get/a14ab8d1d66f53ebcaae9c29c1e57688b30cde6d/bilibili_cookie.jpg)
 
-  注：如果是Windows平台使用Chrome浏览器，可以指定`-c`参数为`chrome`，程序将自动从`./AppData/Local/Google/Chrome/User Data/default/Network/Cookies`读取B站的Cookie信息，譬如我们可以通过`bili-get https://www.bilibili.com/video/BV18G411D7FM -c chrome`命令下载1080p视频
+  方式二：上图F12开发者工具中点击“Application”标签页，再依次点击“Storage”-“Cookies”-“https://www.bilibili.com”，找到“SESSDATA”字段，复制该字段值，填充构造如下字符串即可：
+
+  ```
+  bili-get {URL链接} -c "SESSDATA={字段值};CURRENT_QUALITY=112"
+  ```
+
+  ~~注：如果是Windows平台使用Chrome浏览器，可以指定`-c`参数为`chrome`，程序将自动从`./AppData/Local/Google/Chrome/User Data/default/Network/Cookies`读取B站的Cookie信息（其实就是获取上述SESSDATA字段值），譬如我们可以通过`bili-get https://www.bilibili.com/video/BV18G411D7FM -c chrome`命令下载1080p视频~~（由于最新版本的chrome更新了cookie的加密机制，新的加密密文是以"v20"为前缀，现有解密方式仅支持解密"v10"前缀密文，因此`-c chrome`参数已不可用 2024.10.4）
 
 - `-q`或`--quality`用于指定要下载的视频质量（清晰度），可选值有`MAX`（最高质量，缺省值）、`MIN`（最低质量）、`MANUAL`（手动选择视频质量）
 
