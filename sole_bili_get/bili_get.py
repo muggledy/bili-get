@@ -362,6 +362,10 @@ class Bilibili:
             video_quality_id = window_playinfo['data']['accept_quality']
             video_quality_2_str = dict(zip(video_quality_id, window_playinfo['data']['accept_description']))
             top_video_quality_id = window_playinfo['data']['quality'] #可供下载的最大视频质量id
+            if window_playinfo['data'].get('accept_quality') and isinstance(window_playinfo['data']['accept_quality'], list):
+                accept_quality_max = sorted(window_playinfo['data']['accept_quality'])[-1]
+                if accept_quality_max > top_video_quality_id:
+                    top_video_quality_id = accept_quality_max
             video_info = {} #item: <quality_id: (quality_str, size, urls_list)>
             for v in window_playinfo['data']['dash']['video']:
                 if v['id'] <= top_video_quality_id:

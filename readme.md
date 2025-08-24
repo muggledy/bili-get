@@ -17,7 +17,7 @@ PS（更新版本）：`pip install sole-bili-get -U`
 ```console
 git clone https://github.com/muggledy/bili-get.git
 python setup.py sdist bdist_wheel
-pip install dist\sole_bili_get-0.0.1-py3-none-any.whl //demo
+pip install dist\sole_bili_get-0.0.13-py3-none-any.whl //demo
 bili-get --help
 ```
 
