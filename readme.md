@@ -79,6 +79,8 @@ Note: this is a multi-episode video, you can download them all at once with --pl
 
   ~~注：如果是Windows平台使用Chrome浏览器，可以指定`-c`参数为`chrome`，程序将自动从`./AppData/Local/Google/Chrome/User Data/default/Network/Cookies`读取B站的Cookie信息（其实就是获取上述SESSDATA字段值），譬如我们可以通过`bili-get https://www.bilibili.com/video/BV18G411D7FM -c chrome`命令下载1080p视频~~（由于最新版本的chrome更新了cookie的加密机制，新的加密密文是以"v20"为前缀，现有解密方式仅支持解密"v10"前缀密文，因此`-c chrome`参数已不可用 2024.10.4）
 
+  [2026.8.23 update] 建议下载[bili-get-cmd-build](https://github.com/celestezj/bili-get-cmd-build)浏览器插件一键生成当前B站视频的下载命令
+
 - `-q`或`--quality`用于指定要下载的视频质量（清晰度），可选值有`MAX`（最高质量，缺省值）、`MIN`（最低质量）、`MANUAL`（手动选择视频质量）
 
 - 支持多线程下载，`-t`或`--threads`用于指定额外的下载线程数（缺省值为0，表示不启用多线程），譬如指定`-t 3`，加上主线程，总计会有1+3=4个线程同时下载单个视频二进制文件，不同线程分别下载视频的不同部分，并且只有在平均每个线程被分派下载的字节数>4M时才会真的启用多线程，即对于小文件，仍是采用单个主线程下载
